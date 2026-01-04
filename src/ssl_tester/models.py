@@ -66,6 +66,15 @@ class OSPCheckResult:
 
 
 @dataclass
+class CrossSignedCertificate:
+    """Information about a cross-signed certificate."""
+    
+    chain_cert: CertificateInfo  # The cross-signed certificate from chain
+    trust_store_root: CertificateInfo  # The self-signed root from trust store that replaced it
+    actual_signer: str  # The actual signer of the cross-signed cert (e.g., Starfield)
+
+
+@dataclass
 class ChainCheckResult:
     """Result of chain validation."""
 
@@ -81,6 +90,7 @@ class ChainCheckResult:
     skipped: bool = False  # True if check was explicitly skipped via --skip-chain
     intermediates_fetched_via_aia: bool = False  # True if intermediates were fetched via AIA
     intermediates_fetched_count: int = 0  # Number of intermediates fetched via AIA
+    cross_signed_certs: List[CrossSignedCertificate] = field(default_factory=list)  # Cross-signed certificates detected
 
 
 @dataclass

@@ -85,9 +85,19 @@ def perform_ssl_check(
     logger = logging.getLogger(__name__)
     
     # Handle --only-checks parameter (exclusive mode: only run specified checks)
+    # Handle Typer OptionInfo objects when function is called directly (not via CLI)
+    if only_checks is not None:
+        # Check if it's a Typer OptionInfo object
+        if not isinstance(only_checks, str):
+            # Try to get the default value from OptionInfo
+            if hasattr(only_checks, 'default'):
+                only_checks = only_checks.default if only_checks.default is not None else None
+            elif hasattr(only_checks, 'value'):
+                only_checks = only_checks.value if only_checks.value is not None else None
+    
     only_checks_set: Optional[set] = None
     only_checks_list: Optional[List[str]] = None
-    if only_checks:
+    if only_checks and isinstance(only_checks, str):
         only_checks_list = [c.strip().lower() for c in only_checks.split(",") if c.strip()]
         
         # Valid available checks
@@ -447,11 +457,21 @@ def perform_ssl_check(
             logger.warning(f"Cipher check failed: {e}")
 
     # Check cryptographic vulnerabilities (only if --vulnerabilities is specified)
+    # Handle Typer OptionInfo objects when function is called directly (not via CLI)
+    if vulnerability_list is not None:
+        # Check if it's a Typer OptionInfo object
+        if not isinstance(vulnerability_list, str):
+            # Try to get the default value from OptionInfo
+            if hasattr(vulnerability_list, 'default'):
+                vulnerability_list = vulnerability_list.default if vulnerability_list.default is not None else None
+            elif hasattr(vulnerability_list, 'value'):
+                vulnerability_list = vulnerability_list.value if vulnerability_list.value is not None else None
+    
     vulnerability_checks: List = []
     if vulnerabilities:
         # Parse vulnerability list if provided, otherwise check all
         only_vulnerabilities: Optional[List[str]] = None
-        if vulnerability_list:
+        if vulnerability_list and isinstance(vulnerability_list, str):
             # Parse comma-separated list
             only_vulnerabilities = [v.strip() for v in vulnerability_list.split(",") if v.strip()]
         

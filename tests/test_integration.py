@@ -257,12 +257,14 @@ def test_cli_with_insecure_mode(
     assert mock_connect_tls.called
     # Check both positional and keyword arguments
     if mock_connect_tls.call_args:
+        call_kwargs = mock_connect_tls.call_args.kwargs or {}
+        call_args = mock_connect_tls.call_args[0] or ()
         # Try keyword arguments first
-        if mock_connect_tls.call_args.kwargs:
-            assert mock_connect_tls.call_args.kwargs.get("insecure") is True
-        # Or check positional arguments (insecure is 3rd positional arg)
-        elif len(mock_connect_tls.call_args[0]) >= 4:
-            assert mock_connect_tls.call_args[0][3] is True
+        if "insecure" in call_kwargs:
+            assert call_kwargs.get("insecure") is True
+        # Or check positional arguments (insecure is 3rd positional arg, index 3)
+        elif len(call_args) >= 4:
+            assert call_args[3] is True
 
 
 @patch("ssl_tester.cli.connect_tls")
@@ -345,12 +347,14 @@ def test_cli_with_ca_bundle(
     assert mock_connect_tls.called
     # Check both positional and keyword arguments
     if mock_connect_tls.call_args:
+        call_kwargs = mock_connect_tls.call_args.kwargs or {}
+        call_args = mock_connect_tls.call_args[0] or ()
         # Try keyword arguments first
-        if mock_connect_tls.call_args.kwargs:
-            assert mock_connect_tls.call_args.kwargs.get("ca_bundle") == ca_bundle
-        # Or check positional arguments (ca_bundle is 4th positional arg)
-        elif len(mock_connect_tls.call_args[0]) >= 5:
-            assert mock_connect_tls.call_args[0][4] == ca_bundle
+        if "ca_bundle" in call_kwargs:
+            assert call_kwargs.get("ca_bundle") == ca_bundle
+        # Or check positional arguments (ca_bundle is 4th positional arg, index 4)
+        elif len(call_args) >= 5:
+            assert call_args[4] == ca_bundle
 
 
 @patch("ssl_tester.cli.connect_tls")

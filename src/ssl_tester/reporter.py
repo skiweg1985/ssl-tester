@@ -93,6 +93,27 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
         if result.chain_check.root_cert:
             lines.append(f"  Root: {result.chain_check.root_cert.subject}")
             lines.append(f"    Serial Number: {result.chain_check.root_cert.serial_number}")
+        
+        # Cross-Signed Certificates Section
+        if result.chain_check.cross_signed_certs:
+            lines.append("")
+            lines.append("Cross-Signed Certificates:")
+            for cross_signed in result.chain_check.cross_signed_certs:
+                chain_cert = cross_signed.chain_cert
+                trust_root = cross_signed.trust_store_root
+                actual_signer = cross_signed.actual_signer
+                
+                lines.append(f"  Certificate: {chain_cert.subject}")
+                lines.append(f"    Chain Serial: {chain_cert.serial_number}")
+                lines.append(f"    Trust Store Root Serial: {trust_root.serial_number}")
+                lines.append(f"    Actually Signed By: {actual_signer}")
+                lines.append(f"    Status: INFO ℹ️")
+                lines.append(f"    Note: Cross-signed certificate replaced by trust store root (browser behavior)")
+                lines.append(f"    Explanation: The certificate chain contains a cross-signed version of '{chain_cert.subject}'")
+                lines.append(f"                 that was signed by '{actual_signer}'. This has been replaced by the")
+                lines.append(f"                 self-signed '{trust_root.subject}' from the trust store, which is the")
+                lines.append(f"                 standard browser behavior for handling cross-signed certificates.")
+        
         if result.chain_check.missing_intermediates:
             lines.append(f"  Missing Intermediates: {', '.join(result.chain_check.missing_intermediates)}")
         if result.chain_check.error:
@@ -417,7 +438,16 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
         # Note about AIA fetching (informational)
         if result.chain_check.intermediates_fetched_via_aia:
             count = result.chain_check.intermediates_fetched_count
-            hints.append(f"{count} intermediate certificate(s) were fetched via AIA because the server did not send a complete certificate chain (configuration issue)")
+            if result.service_type and result.service_type in ["SMTP", "IMAP", "POP3"]:
+                hints.append(
+                    f"{count} intermediate certificate(s) were fetched via AIA because the server did not send a complete certificate chain "
+                    f"(common for {result.service_type} STARTTLS connections)"
+                )
+            else:
+                hints.append(
+                    f"{count} intermediate certificate(s) were fetched via AIA because the server did not send a complete certificate chain "
+                    f"(handled automatically via AIA)"
+                )
         
         if hints:
             lines.append("  Notes:")
@@ -1004,7 +1034,19 @@ def generate_summary(result: CheckResult) -> str:
     notes = []
     if result.chain_check.intermediates_fetched_via_aia:
         count = result.chain_check.intermediates_fetched_count
-        notes.append(f"Note: {count} intermediate certificate(s) were fetched via AIA (Authority Information Access) because the server did not send a complete certificate chain. This is a configuration issue - servers should send the complete chain.")
+        # Bei STARTTLS ist es sehr häufig, bei HTTPS auch nicht ungewöhnlich
+        if result.service_type and result.service_type in ["SMTP", "IMAP", "POP3"]:
+            notes.append(
+                f"Note: {count} intermediate certificate(s) were fetched via AIA (Authority Information Access) "
+                f"because the server did not send a complete certificate chain. "
+                f"This is common for {result.service_type} STARTTLS connections."
+            )
+        else:
+            notes.append(
+                f"Note: {count} intermediate certificate(s) were fetched via AIA (Authority Information Access) "
+                f"because the server did not send a complete certificate chain. "
+                f"While servers should ideally send the complete chain, this is handled automatically via AIA."
+            )
 
     if not issues:
         if notes:

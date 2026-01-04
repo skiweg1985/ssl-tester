@@ -225,7 +225,7 @@ def test_rating_f_connection_error():
     rating, reasons = calculate_rating(result)
     assert rating == Rating.F
     assert len(reasons) > 0
-    assert any("Verbindung" in r or "Zertifikat" in r for r in reasons)
+    assert any("Unable to connect" in r or "certificate" in r.lower() for r in reasons)
 
 
 def test_rating_f_ssl_protocols():
@@ -568,7 +568,7 @@ def test_rating_e_only_weak_ciphers():
     rating, reasons = calculate_rating(result)
     assert rating == Rating.E
     assert len(reasons) > 0
-    assert any("schwache" in r.lower() or "Verschlüsselung" in r for r in reasons)
+    assert any("weak" in r.lower() or "encryption" in r.lower() for r in reasons)
 
 
 def test_rating_d_tls11_with_weak_ciphers():
@@ -1015,11 +1015,9 @@ def test_rating_a_plus_plus_perfect():
     )
     
     rating, reasons = calculate_rating(result)
-    # Based on the actual logic behavior, with HSTS and OCSP Stapling enabled,
-    # the rating is A_PLUS (not A++). This seems to be due to the logic structure.
-    # The test verifies that a perfect configuration with TLS 1.3, PFS, HSTS, and OCSP Stapling
-    # results in at least A_PLUS rating.
-    assert rating == Rating.A_PLUS
+    # Perfect configuration with TLS 1.3, PFS, no weak ciphers, and no warnings
+    # should result in A++ rating according to the logic
+    assert rating == Rating.A_PLUS_PLUS
     # With all best practices enabled, there should be no downgrade reasons
     # (or the reasons list might be empty if the logic considers it A+ due to structure)
 

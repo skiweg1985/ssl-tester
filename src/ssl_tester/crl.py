@@ -189,8 +189,10 @@ def _check_single_crl(
                 "application/pkcs7-mime",
                 "application/x-x509-ca-cert",  # Sometimes used
                 "application/octet-stream",  # Some servers (e.g., Microsoft) use this for CRLs
+                "binary/octet-stream",  # Some servers use this variant (non-standard but common)
             ]
-            is_valid_content_type = any(ct in content_type.lower() for ct in valid_content_types)
+            # Accept any content type containing "octet-stream" (flexible for various server implementations)
+            is_valid_content_type = any(ct in content_type.lower() for ct in valid_content_types) or "octet-stream" in content_type.lower()
 
             # Get actual content size (from header or content)
             content_length = response.headers.get("Content-Length")
@@ -541,7 +543,7 @@ def _check_single_crl(
                             # Always set error_msg for mismatch - this is a misconfiguration that must be reported
                             # If signature was valid but mismatch exists, we still report the mismatch
                             error_msg = (
-                                f"CRL misconfiguration detected: The CRL is signed by '{crl_issuer}', "
+                                f"CRL-Misconfiguration detected: The CRL is signed by '{crl_issuer}', "
                                 f"but the certificate (Subject: '{cert_info.subject}') was issued by '{cert_info.issuer}'. "
                                 f"The CRL should be signed either by '{cert_info.issuer}' (Certificate Issuer) "
                                 f"or by '{cert_info.subject}' (Certificate Subject for self-signed CRL). "
@@ -628,9 +630,16 @@ def _check_single_crl(
                     error_msg = "CRL format validation failed: could not parse as DER or PEM"
                 severity = Severity.WARN  # Valid content type but format validation failed
             elif status_code == 200:
-                if not error_msg:
-                    error_msg = f"CRL has wrong content type: '{content_type}' (expected: application/pkix-crl)"
-                severity = Severity.WARN  # Reachable but wrong content type
+                # Wenn die CRL erfolgreich geparst wurde, ist der Content-Type nicht kritisch
+                if is_valid_crl_format:
+                    # CRL wurde erfolgreich geparst - Content-Type ist nicht kritisch
+                    if not error_msg:
+                        error_msg = f"CRL has non-standard content type: '{content_type}' (but CRL is valid)"
+                    severity = Severity.OK  # CRL ist gültig, Content-Type ist nur informativ
+                else:
+                    if not error_msg:
+                        error_msg = f"CRL has wrong content type: '{content_type}' (expected: application/pkix-crl)"
+                    severity = Severity.WARN  # Reachable but wrong content type
             else:
                 if not error_msg:
                     error_msg = f"HTTP error: {status_code}"
