@@ -144,7 +144,7 @@ def perform_ssl_check(
 
     try:
         leaf_cert_der, chain_certs_der = connect_tls(
-            hostname, port, timeout, insecure, ca_bundle, ipv6
+            hostname, port, timeout, insecure, ca_bundle, ipv6, service=service_type
         )
     except ssl.SSLError as e:
         error_msg = str(e)
@@ -154,7 +154,7 @@ def perform_ssl_check(
         
         try:
             leaf_cert_der, chain_certs_der = connect_tls(
-                hostname, port, timeout, insecure=True, ca_bundle=ca_bundle, ipv6=ipv6, ignore_hostname=True
+                hostname, port, timeout, insecure=True, ca_bundle=ca_bundle, ipv6=ipv6, ignore_hostname=True, service=service_type
             )
             logger.debug("Successfully retrieved certificate (validation bypassed for certificate extraction)")
         except Exception as e2:

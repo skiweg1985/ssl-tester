@@ -106,6 +106,97 @@ def _extract_chain_via_openssl(host: str, port: int, timeout: float, ignore_host
     return chain_certs_der
 
 
+def _starttls_smtp(sock: socket.socket, timeout: float) -> None:
+    """
+    Perform SMTP STARTTLS handshake.
+    
+    Args:
+        sock: Connected socket
+        timeout: Socket timeout
+        
+    Raises:
+        ConnectionError: If STARTTLS fails
+    """
+    sock.settimeout(timeout)
+    
+    # Read SMTP banner (e.g., "220 mail.example.com ESMTP")
+    banner = sock.recv(4096).decode('utf-8', errors='ignore')
+    if not banner.startswith('220'):
+        raise ConnectionError(f"Unexpected SMTP banner: {banner[:100]}")
+    
+    # Send EHLO
+    sock.sendall(b"EHLO localhost\r\n")
+    response = sock.recv(4096).decode('utf-8', errors='ignore')
+    
+    # Check if STARTTLS is supported
+    if 'STARTTLS' not in response.upper():
+        raise ConnectionError("Server does not support STARTTLS")
+    
+    # Send STARTTLS command
+    sock.sendall(b"STARTTLS\r\n")
+    response = sock.recv(4096).decode('utf-8', errors='ignore')
+    
+    if not response.startswith('220'):
+        raise ConnectionError(f"STARTTLS command failed: {response[:100]}")
+
+
+def _starttls_imap(sock: socket.socket, timeout: float) -> None:
+    """
+    Perform IMAP STARTTLS handshake.
+    
+    Args:
+        sock: Connected socket
+        timeout: Socket timeout
+        
+    Raises:
+        ConnectionError: If STARTTLS fails
+    """
+    sock.settimeout(timeout)
+    
+    # Read IMAP banner
+    banner = sock.recv(4096).decode('utf-8', errors='ignore')
+    
+    # Send STARTTLS capability check
+    sock.sendall(b"a001 CAPABILITY\r\n")
+    response = sock.recv(4096).decode('utf-8', errors='ignore')
+    
+    if 'STARTTLS' not in response.upper():
+        raise ConnectionError("Server does not support STARTTLS")
+    
+    # Send STARTTLS command
+    sock.sendall(b"a002 STARTTLS\r\n")
+    response = sock.recv(4096).decode('utf-8', errors='ignore')
+    
+    if not response.startswith('a002 OK'):
+        raise ConnectionError(f"STARTTLS command failed: {response[:100]}")
+
+
+def _starttls_pop3(sock: socket.socket, timeout: float) -> None:
+    """
+    Perform POP3 STARTTLS handshake.
+    
+    Args:
+        sock: Connected socket
+        timeout: Socket timeout
+        
+    Raises:
+        ConnectionError: If STARTTLS fails
+    """
+    sock.settimeout(timeout)
+    
+    # Read POP3 banner (e.g., "+OK POP3 server ready")
+    banner = sock.recv(4096).decode('utf-8', errors='ignore')
+    if not banner.startswith('+OK'):
+        raise ConnectionError(f"Unexpected POP3 banner: {banner[:100]}")
+    
+    # Send STLS command (POP3 uses STLS, not STARTTLS)
+    sock.sendall(b"STLS\r\n")
+    response = sock.recv(4096).decode('utf-8', errors='ignore')
+    
+    if not response.startswith('+OK'):
+        raise ConnectionError(f"STLS command failed: {response[:100]}")
+
+
 def connect_tls(
     host: str,
     port: int,
@@ -114,9 +205,12 @@ def connect_tls(
     ca_bundle: Optional[Path] = None,
     ipv6: bool = False,
     ignore_hostname: bool = False,
+    service: Optional[str] = None,
 ) -> Tuple[bytes, List[bytes]]:
     """
     Establish TLS connection and extract certificate chain.
+    
+    Supports both direct TLS and STARTTLS for SMTP, IMAP, POP3.
 
     Args:
         host: Target hostname
@@ -126,6 +220,7 @@ def connect_tls(
         ca_bundle: Custom CA bundle path
         ipv6: Prefer IPv6
         ignore_hostname: Ignore hostname verification (for error recovery)
+        service: Service type (e.g., "SMTP", "IMAP", "POP3") - used to determine STARTTLS
 
     Returns:
         Tuple of (leaf_certificate_der, chain_certificates_der_list)
@@ -135,6 +230,19 @@ def connect_tls(
         ssl.SSLError: If TLS handshake fails
     """
     logger.debug(f"Connecting to {host}:{port} (timeout={timeout}s)")
+    
+    # Check if STARTTLS is needed
+    needs_starttls = False
+    if service:
+        from ssl_tester.services import is_starttls_port
+        needs_starttls = is_starttls_port(port, service)
+    else:
+        # Auto-detect service from port
+        from ssl_tester.services import detect_service, is_starttls_port
+        detected_service = detect_service(port)
+        if detected_service:
+            needs_starttls = is_starttls_port(port, detected_service)
+            service = detected_service
 
     # Resolve address
     family = socket.AF_INET6 if ipv6 else socket.AF_INET
@@ -154,6 +262,19 @@ def connect_tls(
         # Connect
         sock.connect(addr)
         logger.debug(f"TCP connection established to {addr}")
+
+        # Perform STARTTLS handshake if needed
+        if needs_starttls:
+            logger.debug(f"Performing STARTTLS handshake for {service} on port {port}")
+            if service == "SMTP":
+                _starttls_smtp(sock, timeout)
+            elif service == "IMAP":
+                _starttls_imap(sock, timeout)
+            elif service == "POP3":
+                _starttls_pop3(sock, timeout)
+            else:
+                raise ConnectionError(f"STARTTLS not implemented for service: {service}")
+            logger.debug("STARTTLS handshake completed")
 
         # Create SSL context
         context = ssl.create_default_context()
