@@ -211,6 +211,16 @@ ssl-tester example.com --skip-security
 ssl-tester mail.example.com --port 587 --service SMTP
 ```
 
+**Partial Checks (`--only-checks`):**
+When using `--only-checks`, the tool runs in exclusive mode where only the specified checks are performed. This affects both execution and reporting:
+
+- **Execution**: Only the specified checks are executed, all others are skipped
+- **Reporting**: Only sections for the selected checks are displayed in the report
+- **Rating**: Security rating is **not calculated** for partial checks, as it requires all checks to be meaningful
+- **Summary**: Shows "Partial Check" with a list of performed checks instead of security rating and detailed summary
+
+This is useful when you only need specific information (e.g., only CRL checks or only protocol checks) and want a focused, concise report.
+
 ### Output Options
 
 ```bash
@@ -325,6 +335,8 @@ The rating is calculated based on all checks:
 - Cryptographic Vulnerabilities
 - Security Best Practices
 - Certificate validation
+
+**Important:** The security rating is only calculated and displayed when **all checks are performed** (full check). When using `--only-checks` for partial checks, the rating is not calculated, as it requires all checks to provide a meaningful security assessment. Instead, the summary shows "Partial Check" with a list of performed checks.
 
 ### Downgrade Reasons (Rating Reasons)
 

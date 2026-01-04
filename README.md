@@ -335,6 +335,12 @@ Summary:
   Overall Status: WARN ⚠
   Certificate expires in 30 days
 ======================================================================
+
+Example with partial check (--only-checks):
+======================================================================
+Summary:
+  Partial Check: Only chain, crl checks performed
+  Overall Status: OK ✓
 ======================================================================
 ```
 
@@ -464,6 +470,8 @@ ssl-tester example.com --only-checks chain,vulnerabilities --vulnerability-list 
 - `security` - Security Best Practices Checks (HSTS, OCSP Stapling, etc.)
 
 **Note:** When using `--only-checks`, only the specified checks are performed. All other checks are skipped. If `crl` or `ocsp` is specified without `chain`, `chain` is automatically added since CRL/OCSP checks require certificate information.
+
+**Important:** When using `--only-checks`, the report will only show sections for the selected checks. The security rating and detailed summary are only calculated and displayed when all checks are performed (full check). For partial checks, the summary will show "Partial Check" with a list of performed checks instead of a security rating.
 
 ### Output Options
 
