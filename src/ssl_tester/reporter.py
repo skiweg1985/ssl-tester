@@ -1012,3 +1012,522 @@ def generate_summary(result: CheckResult) -> str:
         summary += "; " + "; ".join(notes)
     return summary
 
+
+# ============================================================================
+# Terminal UX Optimization Functions
+# ============================================================================
+
+def _extract_cn_from_dn(dn: str) -> str:
+    """Extract CN (Common Name) from Distinguished Name."""
+    if not dn:
+        return ""
+    parts = dn.split(",")
+    for part in parts:
+        part = part.strip()
+        if part.startswith("CN="):
+            return part[3:].strip()
+    # If no CN found, return first part or shortened DN
+    if parts:
+        return parts[0].strip()
+    return dn[:50] + "..." if len(dn) > 50 else dn
+
+
+def _format_badge(label: str, value: str, status: str = "ok") -> str:
+    """Format a badge for the at-a-glance header."""
+    icons = {"ok": "✓", "warn": "⚠", "fail": "✗", "info": "ℹ"}
+    icon = icons.get(status, "")
+    return f"{label}: {value} {icon}".strip()
+
+
+def _get_revocation_method(result: CheckResult) -> str:
+    """Determine revocation method availability."""
+    has_crl = len(result.crl_checks) > 0
+    has_ocsp = len(result.ocsp_checks) > 0
+    
+    if has_crl and has_ocsp:
+        # Check if both are working
+        crl_ok = any(crl.severity == Severity.OK for crl in result.crl_checks)
+        ocsp_ok = any(ocsp.severity == Severity.OK for ocsp in result.ocsp_checks)
+        if crl_ok and ocsp_ok:
+            return "CRL+OCSP"
+        elif crl_ok:
+            return "CRL"
+        elif ocsp_ok:
+            return "OCSP"
+        else:
+            return "None"
+    elif has_crl:
+        crl_ok = any(crl.severity == Severity.OK for crl in result.crl_checks)
+        return "CRL" if crl_ok else "None"
+    elif has_ocsp:
+        ocsp_ok = any(ocsp.severity == Severity.OK for ocsp in result.ocsp_checks)
+        return "OCSP" if ocsp_ok else "None"
+    return "None"
+
+
+def generate_terminal_report(
+    result: CheckResult,
+    verbose: bool = False,
+    quiet: bool = False,
+    severity_filter: Optional[Severity] = None
+) -> str:
+    """
+    Generate optimized terminal report with at-a-glance header and phased structure.
+    
+    Args:
+        result: CheckResult to report
+        verbose: Show full details for each phase
+        quiet: Only show at-a-glance header + final status
+        severity_filter: Optional severity filter
+        
+    Returns:
+        Formatted terminal report
+    """
+    lines = []
+    
+    # ========================================================================
+    # At-a-glance Header
+    # ========================================================================
+    overall_status_icon = "✓" if result.overall_severity == Severity.OK else ("⚠" if result.overall_severity == Severity.WARN else "✗")
+    overall_status_text = f"[{result.overall_severity.value} {overall_status_icon}]"
+    
+    # Rating badge
+    rating_text = result.rating.value if result.rating else "N/A"
+    
+    # TLS version badge
+    tls_version = "N/A"
+    if result.protocol_check and result.protocol_check.best_version:
+        tls_version = result.protocol_check.best_version
+    
+    # Expiry badge
+    expiry_days = result.validity_check.days_until_expiry
+    expiry_text = f"{expiry_days}d" if expiry_days >= 0 else "EXPIRED"
+    
+    # Hostname badge
+    hostname_status = "OK" if result.hostname_check.matches else "FAIL"
+    
+    # Revocation badge
+    revocation_method = _get_revocation_method(result)
+    
+    # HSTS badge
+    hsts_status = "Yes" if (result.security_check and result.security_check.hsts_enabled) else "No"
+    
+    # OCSP Stapling badge
+    stapling_status = "Yes" if (result.security_check and result.security_check.ocsp_stapling_enabled) else "No"
+    
+    # Build header line
+    header_parts = [
+        overall_status_text,
+        f"{result.target_host}:{result.target_port}",
+        f"Rating: {rating_text}",
+        f"TLS: {tls_version}",
+        f"Expiry: {expiry_text}",
+        f"Hostname: {hostname_status}",
+        f"Revocation: {revocation_method}",
+        f"HSTS: {hsts_status}",
+        f"Stapling: {stapling_status}",
+    ]
+    
+    header_line = "  ".join(header_parts)
+    lines.append(header_line)
+    lines.append(f"Timestamp: {result.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    lines.append("")
+    
+    if quiet:
+        # Quiet mode: only header + final status
+        lines.append("=" * 70)
+        lines.append("Summary:")
+        if result.rating:
+            lines.append(f"  Security Rating: {result.rating.value}")
+            if result.rating_reasons:
+                lines.append("  Downgrade Reasons:")
+                for reason in result.rating_reasons:
+                    lines.append(f"    - {reason}")
+        lines.append(f"  Overall Status: {_format_severity(result.overall_severity)}")
+        if result.summary:
+            lines.append(f"  {result.summary}")
+        lines.append("=" * 70)
+        return "\n".join(lines)
+    
+    # ========================================================================
+    # Findings Section (near top, before detailed phases)
+    # ========================================================================
+    findings_fail = []
+    findings_warn = []
+    findings_info = []
+    
+    # Certificate findings
+    for f in result.certificate_findings:
+        if f.severity == Severity.FAIL:
+            findings_fail.append(f.message)
+        elif f.severity == Severity.WARN:
+            findings_warn.append(f.message)
+        elif f.severity == Severity.OK:
+            findings_info.append(f.message)
+    
+    # Chain check findings
+    if result.chain_check.severity == Severity.FAIL and not result.chain_check.skipped:
+        error_msg = result.chain_check.error or "Certificate chain validation failed"
+        findings_fail.append(f"Chain: {error_msg}")
+    elif result.chain_check.severity == Severity.WARN and not result.chain_check.skipped:
+        error_msg = result.chain_check.error or "Certificate chain has warnings"
+        findings_warn.append(f"Chain: {error_msg}")
+    
+    # Hostname check findings
+    if result.hostname_check.severity == Severity.FAIL and not result.hostname_check.skipped:
+        findings_fail.append("Hostname does not match certificate")
+    elif result.hostname_check.severity == Severity.WARN and not result.hostname_check.skipped:
+        findings_warn.append("Hostname matching has warnings")
+    
+    # Validity check findings
+    if result.validity_check.severity == Severity.FAIL:
+        if result.validity_check.is_expired:
+            findings_fail.append("Certificate expired")
+        else:
+            findings_fail.append("Certificate not yet valid")
+    elif result.validity_check.severity == Severity.WARN:
+        findings_warn.append(f"Certificate expires in {result.validity_check.days_until_expiry} days")
+    
+    # CRL findings
+    failed_crls = [crl for crl in result.crl_checks if crl.severity in [Severity.WARN, Severity.FAIL]]
+    for crl in failed_crls:
+        msg = f"CRL ({crl.url}): {crl.error}" if crl.error else f"CRL ({crl.url}): Not reachable"
+        if crl.severity == Severity.FAIL:
+            findings_fail.append(msg)
+        else:
+            findings_warn.append(msg)
+    
+    # OCSP findings
+    failed_ocsps = [ocsp for ocsp in result.ocsp_checks if ocsp.severity in [Severity.WARN, Severity.FAIL]]
+    for ocsp in failed_ocsps:
+        msg = f"OCSP ({ocsp.url}): {ocsp.error}" if ocsp.error else f"OCSP ({ocsp.url}): Not reachable"
+        if ocsp.severity == Severity.FAIL:
+            findings_fail.append(msg)
+        else:
+            findings_warn.append(msg)
+    
+    # Protocol findings
+    if result.protocol_check:
+        if result.protocol_check.severity == Severity.FAIL:
+            if result.protocol_check.ssl_versions:
+                findings_fail.append(f"SSL protocols supported: {', '.join(result.protocol_check.ssl_versions)}")
+            else:
+                findings_fail.append("No supported protocol versions found")
+        elif result.protocol_check.severity == Severity.WARN:
+            if result.protocol_check.deprecated_versions:
+                findings_warn.append(f"Deprecated TLS versions: {', '.join(result.protocol_check.deprecated_versions)}")
+    
+    # Cipher findings
+    if result.cipher_check:
+        if result.cipher_check.severity == Severity.FAIL:
+            findings_fail.append("Cipher suite configuration has critical issues")
+        elif result.cipher_check.severity == Severity.WARN:
+            if result.cipher_check.weak_ciphers:
+                findings_warn.append(f"Weak ciphers supported: {len(result.cipher_check.weak_ciphers)}")
+            if not result.cipher_check.pfs_supported:
+                findings_warn.append("Perfect Forward Secrecy (PFS) not supported")
+    
+    # Security findings
+    if result.security_check:
+        if result.security_check.severity == Severity.FAIL:
+            if result.security_check.tls_compression_enabled:
+                findings_fail.append("TLS compression enabled (CRIME vulnerability)")
+    
+    # Display findings
+    if findings_fail or findings_warn or (findings_info and verbose):
+        lines.append("Findings:")
+        if findings_fail:
+            lines.append("  FAIL:")
+            for msg in findings_fail[:5]:  # Limit to 5 most critical
+                lines.append(f"    ✗ {msg}")
+            if len(findings_fail) > 5:
+                lines.append(f"    ... and {len(findings_fail) - 5} more")
+        if findings_warn:
+            lines.append("  WARN:")
+            for msg in findings_warn[:5]:
+                lines.append(f"    ⚠ {msg}")
+            if len(findings_warn) > 5:
+                lines.append(f"    ... and {len(findings_warn) - 5} more")
+        if findings_info and verbose:
+            lines.append("  INFO:")
+            for msg in findings_info[:3]:
+                lines.append(f"    ℹ {msg}")
+        if not verbose and (findings_fail or findings_warn):
+            lines.append("  Use --verbose or --debug to show full evidence")
+        lines.append("")
+    
+    # ========================================================================
+    # Phase 1: Connectivity + HTTP Redirect Result
+    # ========================================================================
+    is_connection_error = (
+        result.chain_check.leaf_cert.subject == "<unable to retrieve>" and
+        result.chain_check.error is not None
+    )
+    
+    if is_connection_error:
+        lines.append("Phase 1: Connectivity")
+        lines.append(f"  Status: {_format_severity(Severity.FAIL)}")
+        error_msg = result.chain_check.error
+        if "SSL" in error_msg or "TLS" in error_msg or "certificate verify failed" in error_msg:
+            error_msg = _simplify_ssl_error(error_msg)
+        lines.append(f"  Error: {error_msg}")
+        lines.append("")
+        # Skip other phases for connection errors
+        lines.append("=" * 70)
+        lines.append("Summary:")
+        lines.append(f"  Overall Status: {_format_severity(result.overall_severity)}")
+        if result.summary:
+            lines.append(f"  {result.summary}")
+        lines.append("=" * 70)
+        return "\n".join(lines)
+    
+    lines.append("Phase 1: Connectivity")
+    lines.append(f"  Status: {_format_severity(Severity.OK)}")
+    if verbose:
+        lines.append(f"  Connected to {result.target_host}:{result.target_port}")
+        if result.service_type:
+            lines.append(f"  Service Type: {result.service_type}")
+    lines.append("")
+    
+    # ========================================================================
+    # Phase 2: Certificate Chain + Trust Path Decision
+    # ========================================================================
+    lines.append("Phase 2: Certificate Chain")
+    if result.chain_check.skipped:
+        lines.append(f"  Status: SKIPPED (--skip-chain)")
+    else:
+        lines.append(f"  Status: {_format_severity(result.chain_check.severity)}")
+        
+        if verbose:
+            lines.append(f"  Leaf Subject: {result.chain_check.leaf_cert.subject}")
+            lines.append(f"  Leaf Issuer: {result.chain_check.leaf_cert.issuer}")
+            lines.append(f"  Chain Valid: {result.chain_check.chain_valid}")
+            lines.append(f"  Trust Store Valid: {result.chain_check.trust_store_valid}")
+            lines.append(f"  Intermediates: {len(result.chain_check.intermediate_certs)}")
+            for i, intermediate in enumerate(result.chain_check.intermediate_certs, 1):
+                lines.append(f"    {i}. {intermediate.subject}")
+            if result.chain_check.root_cert:
+                lines.append(f"  Root: {result.chain_check.root_cert.subject}")
+        else:
+            # Compact view: show CN only
+            leaf_cn = _extract_cn_from_dn(result.chain_check.leaf_cert.subject)
+            lines.append(f"  Leaf: {leaf_cn}")
+            if result.chain_check.intermediate_certs:
+                intermediate_cns = [_extract_cn_from_dn(c.subject) for c in result.chain_check.intermediate_certs]
+                lines.append(f"  Intermediates: {len(result.chain_check.intermediate_certs)} ({', '.join(intermediate_cns[:2])}{'...' if len(intermediate_cns) > 2 else ''})")
+            if result.chain_check.root_cert:
+                root_cn = _extract_cn_from_dn(result.chain_check.root_cert.subject)
+                lines.append(f"  Root: {root_cn}")
+        
+        # Cross-Signing Resolution (compact)
+        if result.chain_check.cross_signed_certs:
+            lines.append("")
+            lines.append("  Cross-Signing Resolution (Info - not a security issue):")
+            for cross_signed in result.chain_check.cross_signed_certs:
+                chain_cert = cross_signed.chain_cert
+                trust_root = cross_signed.trust_store_root
+                actual_signer = cross_signed.actual_signer
+                
+                chain_cn = _extract_cn_from_dn(chain_cert.subject)
+                trust_cn = _extract_cn_from_dn(trust_root.subject)
+                signer_cn = _extract_cn_from_dn(actual_signer) if actual_signer else "Unknown"
+                
+                lines.append(f"    Server chain root candidate: {chain_cn} (cross-signed by {signer_cn})")
+                lines.append(f"    Trust anchor selected: {trust_cn} (self-signed, from trust store)")
+                lines.append(f"    Reason: trust store contains self-signed root; RFC 4158 path building")
+                
+                if verbose:
+                    lines.append(f"    Details:")
+                    lines.append(f"      Chain cert issuer: {chain_cert.issuer}")
+                    lines.append(f"      Chain cert serial: {chain_cert.serial_number}")
+                    lines.append(f"      Trust root issuer: {trust_root.issuer}")
+                    lines.append(f"      Trust root serial: {trust_root.serial_number}")
+        
+        if result.chain_check.error:
+            error_msg = result.chain_check.error
+            if "SSL" in error_msg or "TLS" in error_msg:
+                error_msg = _simplify_ssl_error(error_msg)
+            lines.append(f"  Error: {error_msg}")
+    
+    lines.append("")
+    
+    # ========================================================================
+    # Phase 3: Hostname/SAN Match
+    # ========================================================================
+    lines.append("Phase 3: Hostname Matching")
+    if result.hostname_check.skipped:
+        lines.append(f"  Status: SKIPPED (--skip-hostname)")
+    else:
+        lines.append(f"  Status: {_format_severity(result.hostname_check.severity)}")
+        if verbose:
+            lines.append(f"  Expected: {result.hostname_check.expected_hostname}")
+            lines.append(f"  Matches: {result.hostname_check.matches}")
+            if result.hostname_check.matched_san_dns:
+                lines.append(f"  Matched SAN DNS: {result.hostname_check.matched_san_dns}")
+            elif result.hostname_check.matched_cn:
+                lines.append(f"  Matched CN: {result.hostname_check.matched_cn} (deprecated)")
+        else:
+            lines.append(f"  Expected: {result.hostname_check.expected_hostname}")
+            lines.append(f"  Matches: {'Yes' if result.hostname_check.matches else 'No'}")
+    lines.append("")
+    
+    # ========================================================================
+    # Phase 4: Validity Window + Expiry Countdown
+    # ========================================================================
+    lines.append("Phase 4: Certificate Validity")
+    lines.append(f"  Status: {_format_severity(result.validity_check.severity)}")
+    if verbose:
+        lines.append(f"  Valid: {result.validity_check.is_valid}")
+        lines.append(f"  Not Before: {result.validity_check.not_before.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        lines.append(f"  Not After: {result.validity_check.not_after.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    lines.append(f"  Days Until Expiry: {result.validity_check.days_until_expiry}")
+    if result.validity_check.is_expired:
+        lines.append("  ⚠️  CERTIFICATE EXPIRED")
+    lines.append("")
+    
+    # ========================================================================
+    # Phase 5: Revocation (CRL / OCSP)
+    # ========================================================================
+    lines.append("Phase 5: Revocation Checks")
+    
+    # CRL Checks
+    if result.crl_checks:
+        crl_statuses = [crl.severity for crl in result.crl_checks]
+        overall_crl_severity = Severity.FAIL if Severity.FAIL in crl_statuses else (Severity.WARN if Severity.WARN in crl_statuses else Severity.OK)
+        lines.append(f"  CRL Status: {_format_severity(overall_crl_severity)}")
+        
+        if verbose:
+            leaf_crl_checks = [c for c in result.crl_checks if c.certificate_type == "Leaf"]
+            intermediate_crl_checks = [c for c in result.crl_checks if c.certificate_type == "Intermediate"]
+            
+            if leaf_crl_checks:
+                lines.append("  Leaf Certificate CRLs:")
+                for crl_check in leaf_crl_checks:
+                    lines.append(f"    {crl_check.url}: {_format_severity(crl_check.severity)}")
+                    if crl_check.error:
+                        lines.append(f"      Error: {crl_check.error}")
+            
+            if intermediate_crl_checks:
+                lines.append("  Intermediate Certificate CRLs:")
+                for crl_check in intermediate_crl_checks:
+                    lines.append(f"    {crl_check.url}: {_format_severity(crl_check.severity)}")
+                    if crl_check.error:
+                        lines.append(f"      Error: {crl_check.error}")
+        else:
+            reachable_crls = sum(1 for c in result.crl_checks if c.reachable)
+            total_crls = len(result.crl_checks)
+            lines.append(f"  CRLs: {reachable_crls}/{total_crls} reachable")
+            failed_crls = [c for c in result.crl_checks if c.severity in [Severity.WARN, Severity.FAIL]]
+            if failed_crls:
+                for crl in failed_crls[:2]:  # Show first 2 failures
+                    lines.append(f"    {crl.url}: {crl.error or 'Not reachable'}")
+    else:
+        lines.append("  CRL Status: No CRL Distribution Points found")
+    
+    # OCSP Checks
+    if result.ocsp_checks:
+        ocsp_statuses = [ocsp.severity for ocsp in result.ocsp_checks]
+        overall_ocsp_severity = Severity.FAIL if Severity.FAIL in ocsp_statuses else (Severity.WARN if Severity.WARN in ocsp_statuses else Severity.OK)
+        lines.append(f"  OCSP Status: {_format_severity(overall_ocsp_severity)}")
+        
+        if verbose:
+            for ocsp_check in result.ocsp_checks:
+                lines.append(f"    {ocsp_check.url}: {_format_severity(ocsp_check.severity)}")
+                if ocsp_check.error:
+                    lines.append(f"      Error: {ocsp_check.error}")
+        else:
+            reachable_ocsps = sum(1 for o in result.ocsp_checks if o.reachable)
+            total_ocsps = len(result.ocsp_checks)
+            lines.append(f"  OCSP Responders: {reachable_ocsps}/{total_ocsps} reachable")
+            failed_ocsps = [o for o in result.ocsp_checks if o.severity in [Severity.WARN, Severity.FAIL]]
+            if failed_ocsps:
+                for ocsp in failed_ocsps[:2]:
+                    lines.append(f"    {ocsp.url}: {ocsp.error or 'Not reachable'}")
+    else:
+        lines.append("  OCSP Status: No OCSP Responders found")
+    
+    lines.append("")
+    
+    # ========================================================================
+    # Phase 6: TLS Versions + Cipher Suites + Best Practices
+    # ========================================================================
+    lines.append("Phase 6: TLS Configuration")
+    
+    # Protocol Versions
+    if result.protocol_check:
+        lines.append(f"  Protocol Status: {_format_severity(result.protocol_check.severity)}")
+        if verbose:
+            lines.append(f"  Supported Versions: {', '.join(result.protocol_check.supported_versions) if result.protocol_check.supported_versions else 'None'}")
+            lines.append(f"  Best Version: {result.protocol_check.best_version if result.protocol_check.best_version else 'None'}")
+            if result.protocol_check.deprecated_versions:
+                lines.append(f"  Deprecated Versions: {', '.join(result.protocol_check.deprecated_versions)} ⚠")
+            if result.protocol_check.ssl_versions:
+                lines.append(f"  SSL Versions (CRITICAL): {', '.join(result.protocol_check.ssl_versions)} ✗")
+        else:
+            lines.append(f"  Best Version: {result.protocol_check.best_version if result.protocol_check.best_version else 'None'}")
+            if result.protocol_check.deprecated_versions:
+                lines.append(f"  Deprecated: {', '.join(result.protocol_check.deprecated_versions)}")
+    else:
+        lines.append("  Protocol Status: Not checked (--skip-protocol)")
+    
+    # Cipher Suites
+    if result.cipher_check:
+        lines.append(f"  Cipher Status: {_format_severity(result.cipher_check.severity)}")
+        if verbose:
+            lines.append(f"  Supported Ciphers: {len(result.cipher_check.supported_ciphers)}")
+            display_ciphers = result.cipher_check.supported_ciphers[:5]
+            for cipher in display_ciphers:
+                lines.append(f"    - {cipher}")
+            if len(result.cipher_check.supported_ciphers) > 5:
+                lines.append(f"    ... and {len(result.cipher_check.supported_ciphers) - 5} more")
+            if result.cipher_check.weak_ciphers:
+                lines.append(f"  Weak Ciphers: {', '.join(result.cipher_check.weak_ciphers)} ⚠")
+            lines.append(f"  Perfect Forward Secrecy (PFS): {'Yes ✓' if result.cipher_check.pfs_supported else 'No ⚠'}")
+        else:
+            lines.append(f"  Ciphers: {len(result.cipher_check.supported_ciphers)} supported")
+            lines.append(f"  PFS: {'Yes ✓' if result.cipher_check.pfs_supported else 'No ⚠'}")
+            if result.cipher_check.weak_ciphers:
+                lines.append(f"  Weak Ciphers: {len(result.cipher_check.weak_ciphers)} found")
+    else:
+        lines.append("  Cipher Status: Not checked (--skip-cipher)")
+    
+    # Security Best Practices
+    if result.security_check:
+        lines.append(f"  Security Status: {_format_severity(result.security_check.severity)}")
+        if verbose:
+            lines.append(f"  HSTS Enabled: {'Yes ✓' if result.security_check.hsts_enabled else 'No ⚠'}")
+            if result.security_check.hsts_max_age:
+                lines.append(f"  HSTS Max-Age: {result.security_check.hsts_max_age} seconds")
+            lines.append(f"  OCSP Stapling: {'Yes ✓' if result.security_check.ocsp_stapling_enabled else 'No ⚠'}")
+            lines.append(f"  TLS Compression: {'Enabled ✗ (CRIME vulnerability)' if result.security_check.tls_compression_enabled else 'Disabled ✓'}")
+        else:
+            lines.append(f"  HSTS: {'Yes ✓' if result.security_check.hsts_enabled else 'No ⚠'}")
+            lines.append(f"  OCSP Stapling: {'Yes ✓' if result.security_check.ocsp_stapling_enabled else 'No ⚠'}")
+    else:
+        lines.append("  Security Status: Not checked (--skip-security)")
+    
+    lines.append("")
+    
+    # ========================================================================
+    # Summary
+    # ========================================================================
+    lines.append("=" * 70)
+    lines.append("Summary:")
+    if result.only_checks:
+        lines.append(f"  Partial Check: Only {', '.join(sorted(set(result.only_checks)))} checks performed")
+        lines.append(f"  Overall Status: {_format_severity(result.overall_severity)}")
+    else:
+        if result.rating:
+            lines.append(f"  Security Rating: {result.rating.value}")
+            if result.rating_reasons:
+                lines.append("  Downgrade Reasons:")
+                for reason in result.rating_reasons:
+                    lines.append(f"    - {reason}")
+        
+        lines.append(f"  Overall Status: {_format_severity(result.overall_severity)}")
+        if result.summary:
+            lines.append(f"  {result.summary}")
+    lines.append("=" * 70)
+    
+    return "\n".join(lines)
+

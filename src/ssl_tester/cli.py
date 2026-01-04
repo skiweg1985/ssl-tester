@@ -23,6 +23,7 @@ from ssl_tester.security import check_security_best_practices
 from ssl_tester.batch import read_targets_from_file, process_batch, BatchTarget
 from ssl_tester.reporter import (
     generate_text_report,
+    generate_terminal_report,
     generate_json_report,
     calculate_overall_severity,
     generate_summary,
@@ -47,8 +48,10 @@ from ssl_tester.models import (
 app = typer.Typer(help="SSL/TLS Certificate Checker CLI Tool")
 
 # Configure logging
+# Default: Only show WARNING and above to keep report output clean
+# Use --debug flag to enable INFO/DEBUG logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # Changed from INFO to WARNING by default
     format="%(levelname)s: %(message)s",
 )
 
@@ -548,7 +551,9 @@ def check(
     port: int = typer.Option(443, "--port", "-p", help="Port (default: 443)"),
     timeout: float = typer.Option(10.0, "--timeout", "-t", help="Timeout in seconds"),
     json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full details for each phase"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Only show at-a-glance header + final status"),
+    debug: bool = typer.Option(False, "--debug", help="Enable debug logging (shows runtime logs)"),
     no_redirects: bool = typer.Option(False, "--no-redirects", help="Do not follow redirects for CRL URLs"),
     max_crl_bytes: int = typer.Option(
         20 * 1024 * 1024, "--max-crl-bytes", help="Maximum CRL size in bytes (default: 20 MB)"
@@ -610,7 +615,9 @@ def check(
         # If it's an OptionInfo object, it means it wasn't explicitly set, so treat as None
     
     # Set logging level
-    if verbose:
+    # By default, suppress INFO logs to keep report clean
+    # Only show logs if --debug is explicitly set
+    if debug:
         # Set root logger to DEBUG
         logging.getLogger().setLevel(logging.DEBUG)
         # Also set all ssl_tester loggers to DEBUG to ensure debug messages are shown
@@ -619,6 +626,11 @@ def check(
         logging.getLogger('ssl_tester.chain').setLevel(logging.DEBUG)
         logging.getLogger('ssl_tester.certificate').setLevel(logging.DEBUG)
         logging.getLogger('ssl_tester.network').setLevel(logging.DEBUG)
+    else:
+        # Suppress INFO logs by default - only show WARNING and above
+        logging.getLogger().setLevel(logging.WARNING)
+        # Route INFO logs to stderr if needed (but suppress by default)
+        # This keeps the report output clean
 
     # Parse target (handle URLs)
     hostname = target
@@ -687,7 +699,13 @@ def check(
         print(report)
     elif not html_path and not csv_path:
         # Only print text report if not generating HTML/CSV
-        report = generate_text_report(result, severity_filter=severity_filter_obj)
+        # Use new optimized terminal report by default
+        report = generate_terminal_report(
+            result,
+            verbose=verbose,
+            quiet=quiet,
+            severity_filter=severity_filter_obj
+        )
         print(report)
 
     # Exit with appropriate code

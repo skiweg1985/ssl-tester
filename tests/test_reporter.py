@@ -6,10 +6,13 @@ from datetime import datetime, timedelta
 
 from ssl_tester.reporter import (
     generate_text_report,
+    generate_terminal_report,
     generate_json_report,
     calculate_overall_severity,
     generate_summary,
     calculate_rating,
+    _extract_cn_from_dn,
+    _get_revocation_method,
 )
 from ssl_tester.models import (
     CheckResult,
@@ -1020,4 +1023,308 @@ def test_rating_a_plus_plus_perfect():
     assert rating == Rating.A_PLUS_PLUS
     # With all best practices enabled, there should be no downgrade reasons
     # (or the reasons list might be empty if the logic considers it A+ due to structure)
+
+
+# ============================================================================
+# Tests for Terminal UX Optimization Functions
+# ============================================================================
+
+def test_extract_cn_from_dn():
+    """Test CN extraction from Distinguished Name."""
+    # Standard DN with CN
+    assert _extract_cn_from_dn("CN=example.com, O=Example Org, C=US") == "example.com"
+    
+    # DN with CN at end
+    assert _extract_cn_from_dn("O=Example Org, C=US, CN=example.com") == "example.com"
+    
+    # DN without CN
+    assert _extract_cn_from_dn("O=Example Org, C=US") == "O=Example Org"
+    
+    # Empty DN
+    assert _extract_cn_from_dn("") == ""
+    
+    # DN with spaces
+    assert _extract_cn_from_dn("CN=  example.com  , O=Example") == "example.com"
+
+
+def test_get_revocation_method():
+    """Test revocation method detection."""
+    # Both CRL and OCSP available and OK
+    result = CheckResult(
+        target_host="example.com",
+        target_port=443,
+        timestamp=datetime.utcnow(),
+        chain_check=ChainCheckResult(
+            is_valid=True,
+            chain_valid=True,
+            leaf_cert=CertificateInfo(
+                subject="CN=example.com",
+                issuer="CN=CA",
+                serial_number="123",
+                not_before=datetime.utcnow(),
+                not_after=datetime.utcnow() + timedelta(days=365),
+                san_dns_names=[],
+                san_ip_addresses=[],
+                crl_distribution_points=[],
+                ocsp_responder_urls=[],
+                ca_issuers_urls=[],
+                signature_algorithm="sha256",
+                public_key_algorithm="RSA",
+                fingerprint_sha256="abc123",
+            ),
+            intermediate_certs=[],
+            root_cert=None,
+            trust_store_valid=True,
+            missing_intermediates=[],
+            severity=Severity.OK,
+        ),
+        hostname_check=HostnameCheckResult(
+            matches=True,
+            expected_hostname="example.com",
+            severity=Severity.OK,
+        ),
+        validity_check=ValidityCheckResult(
+            is_valid=True,
+            not_before=datetime.utcnow(),
+            not_after=datetime.utcnow() + timedelta(days=365),
+            days_until_expiry=365,
+            is_expired=False,
+            severity=Severity.OK,
+        ),
+        crl_checks=[
+            CRLCheckResult(
+                url="http://crl.example.com",
+                reachable=True,
+                severity=Severity.OK,
+            )
+        ],
+        ocsp_checks=[
+            OSPCheckResult(
+                url="http://ocsp.example.com",
+                reachable=True,
+                severity=Severity.OK,
+            )
+        ],
+        overall_severity=Severity.OK,
+    )
+    
+    assert _get_revocation_method(result) == "CRL+OCSP"
+    
+    # Only CRL available
+    result.ocsp_checks = []
+    assert _get_revocation_method(result) == "CRL"
+    
+    # Only OCSP available
+    result.crl_checks = []
+    result.ocsp_checks = [OSPCheckResult(url="http://ocsp.example.com", reachable=True, severity=Severity.OK)]
+    assert _get_revocation_method(result) == "OCSP"
+    
+    # None available
+    result.ocsp_checks = []
+    assert _get_revocation_method(result) == "None"
+
+
+def test_generate_terminal_report_quiet(sample_check_result):
+    """Test terminal report generation in quiet mode."""
+    sample_check_result.rating = Rating.A_PLUS_PLUS
+    report = generate_terminal_report(sample_check_result, quiet=True)
+    
+    # Should contain header
+    assert "[OK ✓]" in report or "[WARN ⚠]" in report or "[FAIL ✗]" in report
+    assert "example.com:443" in report
+    assert "Rating:" in report
+    
+    # Should contain summary
+    assert "Summary:" in report
+    assert "Overall Status:" in report
+    
+    # Should NOT contain phase details
+    assert "Phase 1:" not in report
+    assert "Phase 2:" not in report
+
+
+def test_generate_terminal_report_standard(sample_check_result):
+    """Test terminal report generation in standard mode."""
+    sample_check_result.rating = Rating.A_PLUS_PLUS
+    report = generate_terminal_report(sample_check_result, verbose=False, quiet=False)
+    
+    # Should contain header
+    assert "[OK ✓]" in report or "[WARN ⚠]" in report or "[FAIL ✗]" in report
+    assert "example.com:443" in report
+    
+    # Should contain all phases
+    assert "Phase 1: Connectivity" in report
+    assert "Phase 2: Certificate Chain" in report
+    assert "Phase 3: Hostname Matching" in report
+    assert "Phase 4: Certificate Validity" in report
+    assert "Phase 5: Revocation Checks" in report
+    assert "Phase 6: TLS Configuration" in report
+    
+    # Should contain summary
+    assert "Summary:" in report
+
+
+def test_generate_terminal_report_verbose(sample_check_result):
+    """Test terminal report generation in verbose mode."""
+    sample_check_result.rating = Rating.A_PLUS_PLUS
+    report = generate_terminal_report(sample_check_result, verbose=True)
+    
+    # Should contain all phases
+    assert "Phase 1: Connectivity" in report
+    assert "Phase 2: Certificate Chain" in report
+    
+    # Should contain detailed information
+    assert "Leaf Subject:" in report
+    assert "Chain Valid:" in report
+    assert "Trust Store Valid:" in report
+
+
+def test_generate_terminal_report_findings(sample_check_result):
+    """Test terminal report findings section."""
+    # Add some findings
+    sample_check_result.certificate_findings = [
+        CertificateFinding(
+            code="TEST_FAIL",
+            severity=Severity.FAIL,
+            message="Test failure message",
+            subject="CN=example.com",
+            issuer="CN=CA",
+        ),
+        CertificateFinding(
+            code="TEST_WARN",
+            severity=Severity.WARN,
+            message="Test warning message",
+            subject="CN=example.com",
+            issuer="CN=CA",
+        ),
+    ]
+    
+    report = generate_terminal_report(sample_check_result, verbose=False)
+    
+    # Should contain findings section
+    assert "Findings:" in report
+    assert "FAIL:" in report
+    assert "WARN:" in report
+    assert "Test failure message" in report
+    assert "Test warning message" in report
+
+
+def test_generate_terminal_report_cross_signing(sample_check_result):
+    """Test terminal report cross-signing resolution."""
+    from ssl_tester.models import CrossSignedCertificate
+    
+    # Add cross-signed certificate
+    cross_signed_cert = CrossSignedCertificate(
+        chain_cert=CertificateInfo(
+            subject="CN=GTS Root R1, O=Google Trust Services LLC, C=US",
+            issuer="CN=GlobalSign Root CA, O=GlobalSign nv-sa, C=BE",
+            serial_number="123",
+            not_before=datetime.utcnow(),
+            not_after=datetime.utcnow() + timedelta(days=365),
+            san_dns_names=[],
+            san_ip_addresses=[],
+            crl_distribution_points=[],
+            ocsp_responder_urls=[],
+            ca_issuers_urls=[],
+            signature_algorithm="sha256",
+            public_key_algorithm="RSA",
+            fingerprint_sha256="abc123",
+        ),
+        trust_store_root=CertificateInfo(
+            subject="CN=GTS Root R1, O=Google Trust Services LLC, C=US",
+            issuer="CN=GTS Root R1, O=Google Trust Services LLC, C=US",
+            serial_number="456",
+            not_before=datetime.utcnow(),
+            not_after=datetime.utcnow() + timedelta(days=365),
+            san_dns_names=[],
+            san_ip_addresses=[],
+            crl_distribution_points=[],
+            ocsp_responder_urls=[],
+            ca_issuers_urls=[],
+            signature_algorithm="sha256",
+            public_key_algorithm="RSA",
+            fingerprint_sha256="abc123",
+        ),
+        actual_signer="CN=GlobalSign Root CA, O=GlobalSign nv-sa, C=BE",
+    )
+    
+    sample_check_result.chain_check.cross_signed_certs = [cross_signed_cert]
+    
+    report = generate_terminal_report(sample_check_result, verbose=False)
+    
+    # Should contain cross-signing resolution
+    assert "Cross-Signing Resolution" in report
+    assert "not a security issue" in report
+    assert "RFC 4158" in report
+    
+    # Should contain compact information
+    assert "GTS Root R1" in report
+    assert "GlobalSign Root CA" in report
+    
+    # Verbose mode should show details
+    report_verbose = generate_terminal_report(sample_check_result, verbose=True)
+    assert "Details:" in report_verbose
+    assert "Chain cert issuer:" in report_verbose
+    assert "Trust root issuer:" in report_verbose
+
+
+def test_generate_terminal_report_connection_error():
+    """Test terminal report for connection errors."""
+    result = CheckResult(
+        target_host="nonexistent.example.com",
+        target_port=443,
+        timestamp=datetime.utcnow(),
+        chain_check=ChainCheckResult(
+            is_valid=False,
+            chain_valid=False,
+            leaf_cert=CertificateInfo(
+                subject="<unable to retrieve>",
+                issuer="<unable to retrieve>",
+                serial_number="<unable to retrieve>",
+                not_before=datetime.utcnow(),
+                not_after=datetime.utcnow(),
+                san_dns_names=[],
+                san_ip_addresses=[],
+                crl_distribution_points=[],
+                ocsp_responder_urls=[],
+                ca_issuers_urls=[],
+                signature_algorithm="<unknown>",
+                public_key_algorithm="<unknown>",
+                fingerprint_sha256="<unknown>",
+            ),
+            intermediate_certs=[],
+            root_cert=None,
+            trust_store_valid=False,
+            missing_intermediates=[],
+            error="DNS resolution failed",
+            severity=Severity.FAIL,
+        ),
+        hostname_check=HostnameCheckResult(
+            matches=False,
+            expected_hostname="nonexistent.example.com",
+            severity=Severity.FAIL,
+        ),
+        validity_check=ValidityCheckResult(
+            is_valid=False,
+            not_before=datetime.utcnow(),
+            not_after=datetime.utcnow(),
+            days_until_expiry=0,
+            is_expired=False,
+            severity=Severity.FAIL,
+        ),
+        crl_checks=[],
+        ocsp_checks=[],
+        overall_severity=Severity.FAIL,
+    )
+    
+    report = generate_terminal_report(result, verbose=False)
+    
+    # Should show connection error
+    assert "Phase 1: Connectivity" in report
+    assert "FAIL" in report or "✗" in report
+    assert "DNS resolution failed" in report or "Connection error" in report
+    
+    # Should NOT show other phases
+    assert "Phase 2:" not in report
+    assert "Phase 3:" not in report
 
