@@ -94,7 +94,7 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
             lines.append(f"  Root: {result.chain_check.root_cert.subject}")
             lines.append(f"    Serial Number: {result.chain_check.root_cert.serial_number}")
         
-        # Cross-Signed Certificates Section
+        # Cross-Signed Certificates Section (simplified for CLI)
         if result.chain_check.cross_signed_certs:
             lines.append("")
             lines.append("Cross-Signing Resolution:")
@@ -103,41 +103,8 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
                 trust_root = cross_signed.trust_store_root
                 actual_signer = cross_signed.actual_signer
                 
-                lines.append("")
-                lines.append("  Overview:")
-                lines.append(f"    The detected certificate represents the same CA identity (same Subject and public key),")
-                lines.append(f"    but exists in multiple signed variants (cross-signed vs. self-signed).")
-                lines.append("")
-                lines.append("  Certificate Comparison:")
-                # Truncate long values for table display
-                chain_subject_display = chain_cert.subject[:50] + "..." if len(chain_cert.subject) > 50 else chain_cert.subject
-                trust_subject_display = trust_root.subject[:50] + "..." if len(trust_root.subject) > 50 else trust_root.subject
-                chain_issuer_display = chain_cert.issuer[:50] + "..." if len(chain_cert.issuer) > 50 else chain_cert.issuer
-                trust_issuer_display = trust_root.issuer[:50] + "..." if len(trust_root.issuer) > 50 else trust_root.issuer
-                
-                table_width = 100
-                lines.append("    " + "─" * table_width)
-                lines.append(f"    │ {'Property':<20} │ {'Cross-Signed Variant':<35} │ {'Trust Anchor':<35} │")
-                lines.append("    " + "─" * table_width)
-                lines.append(f"    │ {'Subject':<20} │ {chain_subject_display:<35} │ {trust_subject_display:<35} │")
-                lines.append(f"    │ {'Issuer':<20} │ {chain_issuer_display:<35} │ {trust_issuer_display:<35} │")
-                lines.append(f"    │ {'Serial Number':<20} │ {chain_cert.serial_number:<35} │ {trust_root.serial_number:<35} │")
-                lines.append(f"    │ {'Role':<20} │ {'Cross-signed':<35} │ {'Trust Anchor':<35} │")
-                lines.append("    " + "─" * table_width)
-                lines.append("")
-                lines.append("  Details:")
-                lines.append(f"    • Server provided variant: Issuer={chain_cert.issuer}, Serial={chain_cert.serial_number}")
-                lines.append(f"    • Trust store variant:    Issuer={trust_root.issuer}, Serial={trust_root.serial_number}")
-                lines.append(f"    • Actual signer of cross-signed variant: {actual_signer}")
-                lines.append("")
-                lines.append("  Resolution:")
-                lines.append("    The cross-signed certificate was replaced by the self-signed trust anchor because:")
-                lines.append("    1. The trust store already contains a self-signed root for this CA")
-                lines.append("    2. Browsers and TLS clients always prefer a trust anchor over a cross-signed path")
-                lines.append("")
-                lines.append("  Status: INFO ℹ️")
-                lines.append("    This behavior is normal, RFC-compliant (RFC 4158 path building), and not a security issue.")
-                lines.append("    Both certificates represent the same CA identity and are cryptographically equivalent.")
+                lines.append(f"  Cross-signed certificate '{chain_cert.subject}' (signed by '{actual_signer}')")
+                lines.append(f"  replaced by trust store root '{trust_root.subject}' (RFC 4158 compliant, not a security issue)")
         
         if result.chain_check.missing_intermediates:
             lines.append(f"  Missing Intermediates: {', '.join(result.chain_check.missing_intermediates)}")

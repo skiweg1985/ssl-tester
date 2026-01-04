@@ -374,6 +374,20 @@ def perform_ssl_check(
             for subject_dn, cert_der in root_certs_from_trust_store.items():
                 if subject_dn not in issuer_map:
                     issuer_map[subject_dn] = cert_der
+                    logger.debug(f"Added trust store root to issuer_map for CRL validation: {subject_dn}")
+            
+            # Add cross-signers from trust store for cross-signed certificate CRL validation
+            # This allows CRL signature verification for CRLs signed by cross-signers (e.g., GlobalSign Root CA)
+            if chain_check.cross_signed_certs:
+                for cross_signed in chain_check.cross_signed_certs:
+                    actual_signer = cross_signed.actual_signer
+                    if actual_signer and actual_signer not in issuer_map:
+                        # Try to find the cross-signer in trust store
+                        if actual_signer in root_certs_from_trust_store:
+                            issuer_map[actual_signer] = root_certs_from_trust_store[actual_signer]
+                            logger.debug(f"Added cross-signer from trust store to issuer_map for CRL validation: {actual_signer}")
+                        else:
+                            logger.debug(f"Cross-signer '{actual_signer}' not found in trust store")
         except Exception as e:
             logger.warning(f"Failed to load root certificates from trust store: {e}")
 

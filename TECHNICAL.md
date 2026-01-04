@@ -29,6 +29,12 @@ This documentation contains detailed technical information for developers and ad
 - Automatic sorting and validation of the chain
 - Support for missing intermediate certificates (AIA fetching)
 - **AIA Fetching Tracking**: The tool tracks and reports when intermediate certificates must be fetched via AIA (Authority Information Access) because the server didn't send a complete certificate chain. This is reported as an informational note in the summary and text report (does not affect security rating). This helps identify configuration issues where servers should send complete certificate chains.
+- **Cross-Signed Certificate Support**: Automatic detection and handling of cross-signed certificates (RFC 4158 compliant). When a cross-signed certificate is detected in the chain, the tool:
+  - Automatically replaces it with the self-signed trust anchor from the trust store (browser behavior)
+  - Validates signatures correctly by skipping validation for the cross-signed variant
+  - Reports the cross-signing resolution with details about both variants
+  - Does not downgrade the security rating (treated as informational, not a security issue)
+  - Supports CRL signature verification for CRLs signed by cross-signers
 - Automatic loading of root certificates from trust store for CRL signature verification
 
 ### Hostname Matching
@@ -50,6 +56,7 @@ This documentation contains detailed technical information for developers and ad
 - **Signature Verification**: Automatic verification of CRL signature against CRL issuer
 - Revocation status check (is the certificate marked as revoked?)
 - Automatic loading of root certificates from trust store if CRL issuer is not present in chain
+- **Cross-Signed Certificate CRL Support**: For cross-signed certificates, the tool automatically loads cross-signers from the trust store to enable CRL signature verification. This ensures that CRLs signed by cross-signers (e.g., GlobalSign Root CA signing a CRL for GTS Root R4) can be properly validated.
 
 ### OCSP Check
 

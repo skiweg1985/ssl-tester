@@ -163,9 +163,16 @@ def validate_chain(
             # Determine root CA based on trust store (browser behavior)
             # Browser logic: If a certificate with subject==issuer is in trust store, it's the root
             # This handles cross-signed certificates correctly
+            # Note: We try to find the root even if trust_store_valid is False,
+            # because cross-signed certificates might cause validation to fail initially
             root_from_trust_store = None
-            if trust_store_valid:
+            try:
                 trust_store_certs = _load_system_trust_store(context)
+            except Exception as e:
+                logger.debug(f"Error loading trust store certificates: {e}")
+                trust_store_certs = []
+            
+            if trust_store_certs:
                 
                 # First: Check if any certificate from chain with subject==issuer is in trust store
                 # This is the browser behavior - if cert with subject==issuer is in trust store, it's the root
@@ -190,12 +197,39 @@ def validate_chain(
                     except Exception:
                         continue
                 
-                # Second: If no root found from chain, try to get root from trust store based on issuer
+                # Second: Check if any certificate from chain has the same subject as a trust store root
+                # This handles cross-signed certificates (same subject, different issuer/serial)
+                if not root_from_trust_store:
+                    for cert_der in all_certs_for_trust_check:
+                        try:
+                            cert_info, _ = parse_certificate(cert_der)
+                            # Check if this cert's subject matches a trust store root (cross-signed case)
+                            for trust_cert_der in trust_store_certs:
+                                try:
+                                    trust_cert = _load_cert_without_warnings(trust_cert_der, pem=False)
+                                    trust_cert_info, _ = parse_certificate(trust_cert_der)
+                                    # Match by subject and verify trust store cert is truly self-signed
+                                    if trust_cert_info.subject == cert_info.subject and _is_truly_self_signed(trust_cert):
+                                        root_from_trust_store = trust_cert_der
+                                        logger.info(f"Root CA '{cert_info.subject}' found in trust store (cross-signed certificate detected)")
+                                        break
+                                except Exception:
+                                    continue
+                            if root_from_trust_store:
+                                break
+                        except Exception:
+                            continue
+                
+                # Third: If no root found from chain, try to get root from trust store based on issuer
                 if not root_from_trust_store:
                     root_from_trust_store = _get_root_from_trust_store(all_certs_for_trust_check, context)
                 
                 if root_from_trust_store:
                     logger.info("Root certificate loaded from trust store for signature validation")
+                    # If we found a root from trust store, the chain is trusted
+                    # This handles cross-signed certificates correctly: even if the cross-signed cert
+                    # itself is not trusted, the trust store root that replaces it is trusted
+                    trust_store_valid = True
                     # Parse root certificate from trust store for inclusion in result
                     root_from_trust_store_info, findings = parse_certificate(root_from_trust_store)
                     all_findings.extend(findings)
@@ -247,20 +281,26 @@ def validate_chain(
                     # 2. Chain cert has different issuer but same subject as trust store root (replaced)
                     root_from_trust_store_info, _ = parse_certificate(root_from_trust_store)
                     
-                    for cert_der in original_chain_certs_der:
+                    # Check both original chain certs and current intermediates for cross-signed certificates
+                    # This handles cases where the cert is still in intermediates but has same subject as trust store root
+                    certs_to_check = list(set(original_chain_certs_der + sorted_intermediates_der))
+                    
+                    for cert_der in certs_to_check:
                         try:
                             cert = _load_cert_without_warnings(cert_der, pem=False)
                             cert_info, _ = parse_certificate(cert_der)
                             
                             # Check if this cert's subject matches the trust store root subject
-                            # and it was replaced (removed from intermediates)
+                            # This indicates it's a cross-signed certificate (same subject, different issuer/serial)
                             if cert_info.subject == root_from_trust_store_info.subject:
                                 # Check if this cert was removed from intermediates (replaced)
                                 # or if it's a cross-signed cert (subject==issuer but not truly self-signed)
-                                was_replaced = cert_info.subject == root_subject
-                                is_cross_signed = (cert_info.subject == cert_info.issuer and not _is_truly_self_signed(cert))
+                                # or if it has a different issuer than the trust store root (cross-signed)
+                                was_replaced = cert_info.subject == root_subject and cert_der not in sorted_intermediates_der
+                                is_cross_signed_subject_issuer = (cert_info.subject == cert_info.issuer and not _is_truly_self_signed(cert))
+                                is_cross_signed_different_issuer = (cert_info.subject != cert_info.issuer and cert_info.subject == root_from_trust_store_info.subject)
                                 
-                                if was_replaced or is_cross_signed:
+                                if was_replaced or is_cross_signed_subject_issuer or is_cross_signed_different_issuer:
                                     # This cert was replaced by trust store root
                                     # Get the actual signer: For cross-signed certs, the issuer field shows subject==issuer,
                                     # but the actual signer is the one who signed it (found by checking signature)
@@ -386,6 +426,11 @@ def validate_chain(
     # For self-signed certificates, we need to include the leaf cert itself for signature validation
     all_chain_certs_der = sorted_intermediates_der.copy()
     
+    # Store original chain certs for cross-signed certificate signature validation
+    # We need to check signatures against original chain certs (including cross-signed ones)
+    # before they were replaced by trust store roots
+    original_chain_certs_for_signature = original_chain_certs_der.copy()
+    
     # If we're using a root from trust store that replaces a chain cert, replace it in the chain
     # This handles cases where chain cert is cross-signed but trust store has the real root
     if root_from_trust_store and root_cert:
@@ -404,7 +449,15 @@ def validate_chain(
     # If leaf is self-signed and no chain certs, add leaf to chain for self-signature validation
     if leaf_cert_info.subject == leaf_cert_info.issuer and not all_chain_certs_der:
         all_chain_certs_der.append(leaf_cert_der)
-    signature_results = validate_signatures(leaf_cert_der, all_chain_certs_der, root_from_trust_store)
+    
+    # Pass cross-signed certificates info to validate_signatures
+    signature_results = validate_signatures(
+        leaf_cert_der, 
+        all_chain_certs_der, 
+        root_from_trust_store,
+        cross_signed_certs=cross_signed_certs,
+        original_chain_certs_der=original_chain_certs_for_signature
+    )
     invalid_signatures = [(fp, subject, err_msg) for fp, (is_valid, subject, err_msg) in signature_results.items() if not is_valid]
     if invalid_signatures:
         # In insecure mode, allow invalid signatures for self-signed certs
@@ -691,6 +744,8 @@ def validate_signatures(
     leaf_cert_der: bytes,
     chain_certs_der: List[bytes],
     root_from_trust_store: Optional[bytes] = None,
+    cross_signed_certs: Optional[List[CrossSignedCertificate]] = None,
+    original_chain_certs_der: Optional[List[bytes]] = None,
 ) -> dict[str, tuple[bool, Optional[str], Optional[str]]]:
     """
     Validate signatures in certificate chain using cryptography's built-in validation.
@@ -699,6 +754,8 @@ def validate_signatures(
         leaf_cert_der: Leaf certificate (DER)
         chain_certs_der: Intermediate certificates (DER, should be sorted)
         root_from_trust_store: Optional root certificate from trust store (DER) if missing from chain
+        cross_signed_certs: Optional list of cross-signed certificates detected
+        original_chain_certs_der: Optional original chain certificates before replacement by trust store root
 
     Returns:
         Dictionary mapping certificate fingerprint to (is_valid, subject, error_message)
@@ -707,6 +764,14 @@ def validate_signatures(
         - error_message: Error message if validation failed, None if valid
     """
     results: dict[str, tuple[bool, Optional[str], Optional[str]]] = {}
+    
+    # Build set of cross-signed certificate subjects for quick lookup
+    cross_signed_subjects: set[str] = set()
+    cross_signed_issuers: dict[str, str] = {}  # Map subject to actual_signer
+    if cross_signed_certs:
+        for cross_signed in cross_signed_certs:
+            cross_signed_subjects.add(cross_signed.chain_cert.subject)
+            cross_signed_issuers[cross_signed.chain_cert.subject] = cross_signed.actual_signer
 
     try:
         leaf_cert = _load_cert_without_warnings(leaf_cert_der, pem=False)
@@ -721,6 +786,18 @@ def validate_signatures(
                 issuer_map[cert_info.subject] = cert
             except Exception as e:
                 logger.warning(f"Error parsing certificate for signature validation: {e}")
+
+        # Also add original chain certs to issuer_map to find cross-signers
+        if original_chain_certs_der:
+            for cert_der in original_chain_certs_der:
+                try:
+                    cert = _load_cert_without_warnings(cert_der, pem=False)
+                    cert_info, _ = parse_certificate(cert_der)
+                    # Only add if not already in issuer_map (don't overwrite trust store root)
+                    if cert_info.subject not in issuer_map:
+                        issuer_map[cert_info.subject] = cert
+                except Exception as e:
+                    logger.debug(f"Error parsing original chain cert for signature validation: {e}")
 
         # Add root from trust store to issuer map if provided
         if root_from_trust_store:
@@ -755,6 +832,15 @@ def validate_signatures(
             logger.debug(f"Leaf issuer not found in chain: {leaf_cert_info.issuer}")
             results[leaf_cert_info.fingerprint_sha256] = (False, leaf_cert_info.subject, error_msg)
 
+        # Get trust store root subject for comparison
+        trust_store_root_subject = None
+        if root_from_trust_store:
+            try:
+                root_cert_info, _ = parse_certificate(root_from_trust_store)
+                trust_store_root_subject = root_cert_info.subject
+            except Exception:
+                pass
+
         # Validate intermediate signatures
         for cert_der in chain_certs_der:
             try:
@@ -763,6 +849,26 @@ def validate_signatures(
 
                 # Skip root (self-signed)
                 if cert_info.subject == cert_info.issuer:
+                    results[cert_info.fingerprint_sha256] = (True, cert_info.subject, None)
+                    continue
+
+                # Check if this is a cross-signed certificate that was replaced by trust store root
+                # If so, skip signature validation (it's handled separately and replaced by trust store root)
+                if cert_info.subject in cross_signed_subjects:
+                    logger.debug(
+                        f"Skipping signature validation for cross-signed certificate '{cert_info.subject}' "
+                        f"(replaced by trust store root, actual signer: {cross_signed_issuers.get(cert_info.subject, 'unknown')})"
+                    )
+                    results[cert_info.fingerprint_sha256] = (True, cert_info.subject, None)
+                    continue
+
+                # Check if this certificate has the same subject as the trust store root
+                # This indicates it's a cross-signed certificate that should be skipped
+                if trust_store_root_subject and cert_info.subject == trust_store_root_subject:
+                    logger.debug(
+                        f"Skipping signature validation for certificate '{cert_info.subject}' "
+                        f"(same subject as trust store root, likely cross-signed)"
+                    )
                     results[cert_info.fingerprint_sha256] = (True, cert_info.subject, None)
                     continue
 
@@ -777,6 +883,45 @@ def validate_signatures(
                         logger.warning(f"Certificate signature validation failed for {cert_info.subject}: {e}")
                         results[cert_info.fingerprint_sha256] = (False, cert_info.subject, error_msg)
                 else:
+                    # Check if this certificate has the same subject as the trust store root
+                    # This indicates it's a cross-signed certificate that should be skipped
+                    if root_from_trust_store:
+                        try:
+                            root_cert_info, _ = parse_certificate(root_from_trust_store)
+                            if cert_info.subject == root_cert_info.subject:
+                                logger.debug(
+                                    f"Skipping signature validation for certificate '{cert_info.subject}' "
+                                    f"(same subject as trust store root, likely cross-signed)"
+                                )
+                                results[cert_info.fingerprint_sha256] = (True, cert_info.subject, None)
+                                continue
+                        except Exception:
+                            pass
+                    
+                    # Check if this certificate's issuer is a cross-signer (not in chain but in original chain)
+                    # This handles cases where a cross-signed cert's issuer is not in the filtered chain
+                    if original_chain_certs_der:
+                        found_in_original = False
+                        for orig_cert_der in original_chain_certs_der:
+                            try:
+                                orig_cert_info, _ = parse_certificate(orig_cert_der)
+                                if orig_cert_info.subject == cert_info.issuer:
+                                    # Found the issuer in original chain - try to validate
+                                    orig_cert = _load_cert_without_warnings(orig_cert_der, pem=False)
+                                    try:
+                                        cert.verify_directly_issued_by(orig_cert)
+                                        results[cert_info.fingerprint_sha256] = (True, cert_info.subject, None)
+                                        found_in_original = True
+                                        logger.debug(f"Validated signature using original chain cert for '{cert_info.subject}'")
+                                        break
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                continue
+                        
+                        if found_in_original:
+                            continue
+                    
                     error_msg = f"Issuer '{cert_info.issuer}' not found in certificate chain"
                     logger.debug(f"Issuer not found for certificate: {cert_info.issuer}")
                     results[cert_info.fingerprint_sha256] = (False, cert_info.subject, error_msg)
