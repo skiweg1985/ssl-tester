@@ -1330,9 +1330,20 @@ def generate_terminal_report(
                 
                 chain_cn = _extract_cn_from_dn(chain_cert.subject)
                 trust_cn = _extract_cn_from_dn(trust_root.subject)
-                signer_cn = _extract_cn_from_dn(actual_signer) if actual_signer else "Unknown"
                 
-                lines.append(f"    Server chain root candidate: {chain_cn} (cross-signed by {signer_cn})")
+                # Format the actual signer information
+                if actual_signer and actual_signer != "Unknown (signature verification failed)":
+                    signer_cn = _extract_cn_from_dn(actual_signer)
+                    # Check if signer is different from the chain cert subject
+                    if signer_cn != chain_cn:
+                        signer_info = f"cross-signed by {signer_cn}"
+                    else:
+                        # If signer equals subject, it means we couldn't determine the actual signer
+                        signer_info = "cross-signed (actual signer could not be determined)"
+                else:
+                    signer_info = "cross-signed (actual signer could not be determined)"
+                
+                lines.append(f"    Server chain root candidate: {chain_cn} ({signer_info})")
                 lines.append(f"    Trust anchor selected: {trust_cn} (self-signed, from trust store)")
                 lines.append(f"    Reason: trust store contains self-signed root; RFC 4158 path building")
                 
@@ -1340,6 +1351,8 @@ def generate_terminal_report(
                     lines.append(f"    Details:")
                     lines.append(f"      Chain cert issuer: {chain_cert.issuer}")
                     lines.append(f"      Chain cert serial: {chain_cert.serial_number}")
+                    if actual_signer and actual_signer != "Unknown (signature verification failed)":
+                        lines.append(f"      Actual signer: {actual_signer}")
                     lines.append(f"      Trust root issuer: {trust_root.issuer}")
                     lines.append(f"      Trust root serial: {trust_root.serial_number}")
         
@@ -1507,6 +1520,74 @@ def generate_terminal_report(
         lines.append("  Security Status: Not checked (--skip-security)")
     
     lines.append("")
+    
+    # ========================================================================
+    # Phase 7: Security / Vulnerability Checks
+    # ========================================================================
+    if result.vulnerability_checks:
+        lines.append("Phase 7: Security Checks")
+        vulnerable_found = [v for v in result.vulnerability_checks if v.vulnerable]
+        
+        # Determine overall severity for vulnerability checks
+        if vulnerable_found:
+            overall_vuln_severity = Severity.FAIL if any(v.severity == Severity.FAIL for v in vulnerable_found) else Severity.WARN
+        else:
+            overall_vuln_severity = Severity.OK
+        
+        lines.append(f"  Status: {_format_severity(overall_vuln_severity)}")
+        lines.append(f"  Vulnerabilities Found: {len(vulnerable_found)} of {len(result.vulnerability_checks)}")
+        
+        if verbose:
+            # Show all vulnerabilities with details
+            for vuln in result.vulnerability_checks:
+                if vuln.vulnerable:
+                    status_icon = "✗"
+                    status_text = "VULNERABLE"
+                elif "test skipped" in vuln.description.lower() or "nmap required" in vuln.description.lower():
+                    status_icon = "⊘"
+                    status_text = "SKIPPED (nmap required)"
+                elif "test failed" in vuln.description.lower():
+                    status_icon = "⚠"
+                    status_text = "ERROR"
+                else:
+                    status_icon = "✓"
+                    status_text = "OK"
+                
+                cve_info = f" ({vuln.cve_id})" if vuln.cve_id else ""
+                lines.append(f"    {vuln.vulnerability_name}{cve_info}: {status_icon} {status_text}")
+                if vuln.vulnerable and vuln.description:
+                    lines.append(f"      {vuln.description}")
+                if vuln.vulnerable and vuln.recommendation:
+                    lines.append(f"      Recommendation: {vuln.recommendation}")
+        else:
+            # Show only vulnerable ones in compact mode, plus summary
+            if vulnerable_found:
+                for vuln in vulnerable_found:
+                    cve_info = f" ({vuln.cve_id})" if vuln.cve_id else ""
+                    lines.append(f"    {vuln.vulnerability_name}{cve_info}: {_format_severity(vuln.severity)}")
+            else:
+                lines.append("  All checks: OK ✓")
+            
+            # Show summary of all checks
+            checks_summary = []
+            for vuln in result.vulnerability_checks:
+                if vuln.vulnerable:
+                    checks_summary.append(f"{vuln.vulnerability_name}: NICHT OK")
+                elif "test skipped" in vuln.description.lower() or "nmap required" in vuln.description.lower():
+                    checks_summary.append(f"{vuln.vulnerability_name}: ÜBERSPRUNGEN")
+                elif "test failed" in vuln.description.lower():
+                    checks_summary.append(f"{vuln.vulnerability_name}: FEHLER")
+                else:
+                    checks_summary.append(f"{vuln.vulnerability_name}: OK")
+            
+            if checks_summary:
+                lines.append(f"  Checks: {', '.join(checks_summary)}")
+        
+        lines.append("")
+    elif result.only_checks and "vulnerabilities" not in result.only_checks:
+        # Only show "not checked" if vulnerabilities were explicitly skipped
+        pass
+    # If vulnerability_checks is empty and not in only_checks, don't show phase (wasn't requested)
     
     # ========================================================================
     # Summary

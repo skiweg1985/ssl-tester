@@ -1,7 +1,7 @@
 """OCSP responder reachability checks and validation."""
 
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Callable
 import base64
 import httpx
 from cryptography import x509
@@ -23,6 +23,7 @@ def check_ocsp_reachability(
     timeout: float = 10.0,
     proxy: Optional[str] = None,
     crl_results: Optional[List[CRLCheckResult]] = None,
+    progress_callback: Optional[Callable[[str, Optional[int], Optional[int]], None]] = None,
 ) -> List[OSPCheckResult]:
     """
     Check reachability and validate OCSP responders.
@@ -63,6 +64,9 @@ def check_ocsp_reachability(
                         break
         logger.debug(f"CRL fallback status: available={crl_available}, successful={crl_successful}")
 
+    total_ocsp_urls = len(cert_info.ocsp_responder_urls) if cert_info.ocsp_responder_urls else 0
+    current_index = 0
+    
     for ocsp_url in cert_info.ocsp_responder_urls:
         if cert_der and issuer_cert_der:
             # Build proper OCSP request with POST
@@ -80,6 +84,11 @@ def check_ocsp_reachability(
                 severity=Severity.WARN,
             )
         results.append(result)
+        
+        # Update progress
+        current_index += 1
+        if progress_callback and total_ocsp_urls > 0:
+            progress_callback("Checking OCSP reachability...", current_index, total_ocsp_urls)
 
     return results
 

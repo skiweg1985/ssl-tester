@@ -307,51 +307,16 @@ def validate_chain(
                                     # For replaced certs, use the issuer field directly
                                     if cert_info.subject == cert_info.issuer:
                                         # Cross-signed: subject==issuer but not self-signed
-                                        # The actual signer is the one who signed it (found by checking signature)
-                                        # We need to find which cert in the chain or trust store signed this one
-                                        actual_signer = None
+                                        # Use the new function to find the actual signer by signature verification
+                                        # trust_store_certs is available in this scope (loaded earlier)
+                                        actual_signer = _find_actual_signer(
+                                            cert=cert,
+                                            cert_info=cert_info,
+                                            candidate_certs_der=original_chain_certs_der,
+                                            trust_store_certs_der=trust_store_certs
+                                        )
                                         
-                                        # Try to find the actual signer by checking which cert could sign this
-                                        # Check all certs in original chain
-                                        for other_cert_der in original_chain_certs_der:
-                                            if other_cert_der == cert_der:
-                                                continue
-                                            try:
-                                                other_cert = _load_cert_without_warnings(other_cert_der, pem=False)
-                                                other_cert_info, _ = parse_certificate(other_cert_der)
-                                                # Try to verify signature directly (bypass issuer check)
-                                                try:
-                                                    # Use public key verification directly
-                                                    other_public_key = other_cert.public_key()
-                                                    # Try to verify signature - this will work if other_cert signed cert
-                                                    cert.public_key().verify(
-                                                        cert.signature,
-                                                        cert.tbs_certificate_bytes,
-                                                        _get_padding_for_algorithm(cert.signature_algorithm_oid),
-                                                        cert.signature_hash_algorithm
-                                                    )
-                                                    # If we get here without exception, signature might match
-                                                    # But we need to check if issuer matches or if it's cross-signed
-                                                    # For cross-signed, issuer won't match, so we check signature differently
-                                                    from cryptography.hazmat.primitives import hashes
-                                                    from cryptography.hazmat.primitives.asymmetric import padding
-                                                    
-                                                    # Try verify_directly_issued_by - if it fails due to issuer mismatch,
-                                                    # but signature is valid, it's cross-signed
-                                                    try:
-                                                        cert.verify_directly_issued_by(other_cert)
-                                                        actual_signer = other_cert_info.subject
-                                                        break
-                                                    except ValueError:
-                                                        # Issuer mismatch but might be valid signature - check manually
-                                                        # For now, if issuer doesn't match, skip
-                                                        pass
-                                                except Exception:
-                                                    continue
-                                            except Exception:
-                                                continue
-                                        
-                                        # Fallback: if we can't find the signer by verification,
+                                        # Fallback: if signature verification didn't find a signer,
                                         # check if there's a cert in chain with different subject that could be the signer
                                         # For cross-signed certs, the signer is usually the issuer of the last intermediate
                                         # or a root CA in the chain
@@ -372,9 +337,9 @@ def validate_chain(
                                                 except Exception:
                                                     continue
                                         
-                                        # Final fallback: use issuer field (even though it's wrong for cross-signed)
+                                        # Final fallback: if we still can't find the signer, indicate unknown
                                         if not actual_signer:
-                                            actual_signer = cert_info.issuer
+                                            actual_signer = "Unknown (signature verification failed)"
                                     else:
                                         # Replaced cert: issuer field is correct
                                         actual_signer = cert_info.issuer
@@ -983,6 +948,71 @@ def _get_padding_for_algorithm(oid: x509.oid.SignatureAlgorithmOID) -> Optional[
     else:
         # Default to PKCS1v15 for RSA
         return padding.PKCS1v15()
+
+
+def _find_actual_signer(
+    cert: x509.Certificate,
+    cert_info: CertificateInfo,
+    candidate_certs_der: List[bytes],
+    trust_store_certs_der: Optional[List[bytes]] = None
+) -> Optional[str]:
+    """
+    Find the actual signer of a cross-signed certificate by verifying signatures.
+    
+    For cross-signed certificates, the issuer field shows subject==issuer, but the
+    actual signer is a different CA. This function finds the actual signer by
+    verifying the signature with each candidate certificate's public key.
+    
+    Args:
+        cert: The cross-signed certificate
+        cert_info: CertificateInfo for the cross-signed certificate
+        candidate_certs_der: List of candidate certificates that might have signed it (DER)
+        trust_store_certs_der: Optional list of trust store certificates (DER)
+        
+    Returns:
+        Subject DN of the actual signer, or None if not found
+    """
+    # Combine all candidate certificates
+    all_candidates = list(candidate_certs_der)
+    if trust_store_certs_der:
+        all_candidates.extend(trust_store_certs_der)
+    
+    # Try each candidate certificate
+    for candidate_der in all_candidates:
+        try:
+            candidate_cert = _load_cert_without_warnings(candidate_der, pem=False)
+            candidate_info, _ = parse_certificate(candidate_der)
+            
+            # Skip if it's the same certificate
+            if candidate_info.fingerprint_sha256 == cert_info.fingerprint_sha256:
+                continue
+            
+            # Try to verify signature using verify_directly_issued_by
+            # This works even if issuer doesn't match (cross-signing case)
+            try:
+                # verify_directly_issued_by checks signature validity, not issuer match
+                # For cross-signed certs, this will succeed if the signature is valid
+                cert.verify_directly_issued_by(candidate_cert)
+                # If we get here, the signature is valid!
+                logger.debug(
+                    f"Found actual signer of cross-signed cert '{cert_info.subject}': "
+                    f"'{candidate_info.subject}' (signature verified)"
+                )
+                return candidate_info.subject
+            except ValueError:
+                # Signature verification failed or issuer mismatch - try next candidate
+                continue
+            except Exception as e:
+                # Other error - try next candidate
+                logger.debug(f"Error verifying signature with candidate '{candidate_info.subject}': {e}")
+                continue
+        except Exception as e:
+            logger.debug(f"Error processing candidate certificate: {e}")
+            continue
+    
+    # If no signer found by signature verification, return None
+    logger.debug(f"Could not find actual signer for cross-signed cert '{cert_info.subject}' by signature verification")
+    return None
 
 
 def _is_truly_self_signed(cert: x509.Certificate) -> bool:

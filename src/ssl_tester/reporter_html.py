@@ -844,7 +844,10 @@ def _generate_cross_signed_section(cross_signed_certs) -> str:
                     <ul>
                         <li><strong>Server provided variant:</strong> Issuer={chain_cert.issuer}, Serial={chain_cert.serial_number}</li>
                         <li><strong>Trust store variant:</strong> Issuer={trust_root.issuer}, Serial={trust_root.serial_number}</li>
-                        <li><strong>Actual signer of cross-signed variant:</strong> {actual_signer}</li>
+                        <li><strong>Actual signer of cross-signed variant:</strong> {
+                            actual_signer if actual_signer and actual_signer != "Unknown (signature verification failed)" 
+                            else "Could not be determined (signature verification failed)"
+                        }</li>
                     </ul>
                     
                     <strong>Resolution:</strong>

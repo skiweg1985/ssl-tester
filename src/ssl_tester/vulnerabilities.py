@@ -1,7 +1,7 @@
 """Cryptographic vulnerability detection."""
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Callable
 
 from ssl_tester.models import VulnerabilityCheckResult, Severity
 from ssl_tester.nmap_helper import (
@@ -643,6 +643,7 @@ def check_cryptographic_flaws(
     port: int,
     timeout: float = 10.0,
     only_vulnerabilities: Optional[List[str]] = None,
+    progress_callback: Optional[Callable[[str, Optional[int], Optional[int]], None]] = None,
 ) -> List[VulnerabilityCheckResult]:
     """
     Check for all known cryptographic vulnerabilities.
@@ -714,9 +715,14 @@ def check_cryptographic_flaws(
         ]
     
     # Run selected checks
-    for check_func in checks_to_run:
+    total_checks = len(checks_to_run)
+    for index, check_func in enumerate(checks_to_run, 1):
         try:
+            if progress_callback and total_checks > 0:
+                progress_callback("Checking security vulnerabilities...", index - 1, total_checks)
             results.append(check_func(host, port, timeout))
+            if progress_callback and total_checks > 0:
+                progress_callback("Checking security vulnerabilities...", index, total_checks)
         except Exception as e:
             logger.error(f"Error running {check_func.__name__}: {e}")
             # Create a failed result for this check
@@ -731,5 +737,7 @@ def check_cryptographic_flaws(
                     recommendation="Check nmap installation and network connectivity",
                 )
             )
+            if progress_callback and total_checks > 0:
+                progress_callback("Checking security vulnerabilities...", index, total_checks)
     
     return results

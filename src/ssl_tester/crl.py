@@ -2,7 +2,7 @@
 
 import logging
 import warnings
-from typing import List, Optional
+from typing import List, Optional, Callable
 import httpx
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -26,6 +26,7 @@ def check_crl_reachability(
     leaf_cert_info: Optional[CertificateInfo] = None,
     intermediate_cert_infos: Optional[List[CertificateInfo]] = None,
     root_cert_info: Optional[CertificateInfo] = None,
+    progress_callback: Optional[Callable[[str, Optional[int], Optional[int]], None]] = None,
 ) -> List[CRLCheckResult]:
     """
     Check reachability of all CRL Distribution Points and validate them.
@@ -45,6 +46,10 @@ def check_crl_reachability(
     results: List[CRLCheckResult] = []
     # Don't skip duplicate URLs - we need to check each certificate's CRL URLs
     # to detect misconfigurations (e.g., leaf cert pointing to root CA CRL)
+    
+    # Count total CRL URLs for progress tracking
+    total_crl_urls = sum(len(cert_info.crl_distribution_points) for cert_info in cert_infos)
+    current_index = 0
 
     for cert_info in cert_infos:
         # Determine certificate type
@@ -105,6 +110,11 @@ def check_crl_reachability(
             result.certificate_subject = cert_info.subject
             result.certificate_type = cert_type
             results.append(result)
+            
+            # Update progress
+            current_index += 1
+            if progress_callback and total_crl_urls > 0:
+                progress_callback("Checking CRL reachability...", current_index, total_crl_urls)
 
     return results
 

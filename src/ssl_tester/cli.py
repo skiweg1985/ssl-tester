@@ -5,7 +5,7 @@ import ssl
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Callable
 from urllib.parse import urlparse
 
 import typer
@@ -75,6 +75,7 @@ def perform_ssl_check(
     no_redirects: bool = False,
     max_crl_bytes: int = 20 * 1024 * 1024,
     service: Optional[str] = None,
+    progress_callback: Optional[Callable[[str, Optional[int], Optional[int]], None]] = None,
 ) -> CheckResult:
     """
     Perform SSL/TLS check for a single target.
@@ -149,6 +150,8 @@ def perform_ssl_check(
     
     # Connect and get certificates
     logger.debug(f"Connecting to {hostname}:{port}...")
+    if progress_callback:
+        progress_callback("Connecting to server...", None, None)
     
     connection_error: Optional[str] = None
     leaf_cert_der: Optional[bytes] = None
@@ -245,12 +248,16 @@ def perform_ssl_check(
         return result
 
     # Parse leaf certificate
+    if progress_callback:
+        progress_callback("Parsing certificate...", None, None)
     leaf_cert_info, leaf_findings = parse_certificate(leaf_cert_der)
     all_certificate_findings: List[CertificateFinding] = leaf_findings.copy()
 
     # If no chain was extracted, try AIA fetching
     intermediates_fetched_count = 0
     if not chain_certs_der and leaf_cert_info.ca_issuers_urls:
+        if progress_callback:
+            progress_callback("Fetching intermediate certificates...", None, None)
         logger.debug("No intermediate certificates in chain, attempting to fetch via AIA...")
         try:
             fetched_intermediates = fetch_intermediates_via_aia(leaf_cert_info, timeout, proxy=proxy)
@@ -262,6 +269,8 @@ def perform_ssl_check(
             logger.warning(f"Failed to fetch intermediates via AIA: {e}")
 
     # Check hostname
+    if progress_callback:
+        progress_callback("Checking hostname match...", None, None)
     if skip_hostname:
         hostname_check = HostnameCheckResult(
             expected_hostname=hostname,
@@ -284,9 +293,13 @@ def perform_ssl_check(
             hostname_check.matches = False
 
     # Check validity
+    if progress_callback:
+        progress_callback("Checking certificate validity...", None, None)
     validity_check = check_validity(leaf_cert_info)
 
     # Validate chain
+    if progress_callback:
+        progress_callback("Validating certificate chain...", None, None)
     if skip_chain:
         chain_check = ChainCheckResult(
             is_valid=False,
@@ -397,6 +410,13 @@ def perform_ssl_check(
     # Check CRL reachability
     crl_checks = []
     if not skip_chain and (only_checks_set is None or "crl" in only_checks_set):
+        # Count total CRL URLs to check
+        total_crl_urls = sum(len(cert_info.crl_distribution_points) for cert_info in all_cert_infos)
+        if progress_callback:
+            if total_crl_urls > 0:
+                progress_callback("Checking CRL reachability...", 0, total_crl_urls)
+            else:
+                progress_callback("Checking CRL reachability...", None, None)
         try:
             crl_checks = check_crl_reachability(
                 all_cert_infos,
@@ -410,6 +430,7 @@ def perform_ssl_check(
                 leaf_cert_info=leaf_cert_info,
                 intermediate_cert_infos=chain_check.intermediate_certs,
                 root_cert_info=chain_check.root_cert,
+                progress_callback=progress_callback,
             )
         except Exception as e:
             logger.warning(f"CRL check failed: {e}")
@@ -417,6 +438,13 @@ def perform_ssl_check(
     # Check OCSP reachability
     ocsp_checks = []
     if not skip_chain and (only_checks_set is None or "ocsp" in only_checks_set):
+        # Count total OCSP URLs to check
+        total_ocsp_urls = len(leaf_cert_info.ocsp_responder_urls) if leaf_cert_info.ocsp_responder_urls else 0
+        if progress_callback:
+            if total_ocsp_urls > 0:
+                progress_callback("Checking OCSP reachability...", 0, total_ocsp_urls)
+            else:
+                progress_callback("Checking OCSP reachability...", None, None)
         try:
             issuer_cert_der: Optional[bytes] = None
             
@@ -453,6 +481,7 @@ def perform_ssl_check(
                 timeout=timeout, 
                 proxy=proxy,
                 crl_results=crl_checks,  # Pass CRL results as fallback
+                progress_callback=progress_callback,
             )
         except Exception as e:
             logger.warning(f"OCSP check failed: {e}")
@@ -460,6 +489,8 @@ def perform_ssl_check(
     # Check protocol versions
     protocol_check: Optional[ProtocolCheckResult] = None
     if not skip_protocol:
+        if progress_callback:
+            progress_callback("Checking protocol versions...", None, None)
         try:
             protocol_check = check_protocol_versions(hostname, port, timeout, service=service_type)
         except Exception as e:
@@ -468,6 +499,8 @@ def perform_ssl_check(
     # Check cipher suites
     cipher_check: Optional[CipherCheckResult] = None
     if not skip_cipher:
+        if progress_callback:
+            progress_callback("Checking cipher suites...", None, None)
         try:
             cipher_check = check_cipher_suites(hostname, port, timeout, service=service_type)
         except Exception as e:
@@ -492,9 +525,13 @@ def perform_ssl_check(
             # Parse comma-separated list
             only_vulnerabilities = [v.strip() for v in vulnerability_list.split(",") if v.strip()]
         
+        # Count total vulnerabilities to check (default is 8)
+        total_vulnerabilities = len(only_vulnerabilities) if only_vulnerabilities else 8
+        if progress_callback:
+            progress_callback("Checking security vulnerabilities...", 0, total_vulnerabilities)
         try:
             vulnerability_checks = check_cryptographic_flaws(
-                hostname, port, timeout, only_vulnerabilities=only_vulnerabilities
+                hostname, port, timeout, only_vulnerabilities=only_vulnerabilities, progress_callback=progress_callback
             )
         except Exception as e:
             logger.warning(f"Vulnerability check failed: {e}")
@@ -502,6 +539,8 @@ def perform_ssl_check(
     # Check security best practices
     security_check: Optional[SecurityCheckResult] = None
     if not skip_security:
+        if progress_callback:
+            progress_callback("Checking security best practices...", None, None)
         try:
             security_check = check_security_best_practices(hostname, port, timeout, proxy, service=service_type)
         except Exception as e:
@@ -656,8 +695,95 @@ def check(
     else:
         service_type = None  # Will be auto-detected in perform_ssl_check
 
+    # Handle OptionInfo objects when function is called directly (not via CLI)
+    html_path = html if isinstance(html, (Path, type(None))) else None
+    csv_path = csv if isinstance(csv, (Path, type(None))) else None
+
+    # Set up progress callback if not in quiet/json/html/csv mode
+    progress_callback = None
+    if not quiet and not json_output and not html_path and not csv_path:
+        try:
+            from rich.console import Console
+            from rich.live import Live
+            from rich.spinner import Spinner
+            from rich.text import Text
+            
+            console = Console()
+            spinner_text = Text("")
+            
+            def update_progress(message: str):
+                spinner_text.plain = message
+            
+            progress_callback = update_progress
+        except ImportError:
+            # Fallback if rich is not available (shouldn't happen, but just in case)
+            progress_callback = None
+
     # Perform SSL check using the core function
-    result = perform_ssl_check(
+    if progress_callback:
+        try:
+            from rich.console import Console
+            from rich.live import Live
+            from rich.spinner import Spinner
+            from rich.text import Text
+            
+            console = Console()
+            spinner = Spinner("dots", text=Text(""))
+            
+            with Live(spinner, console=console, refresh_per_second=10):
+                def update_progress(message: str, current: Optional[int] = None, total: Optional[int] = None):
+                    if current is not None and total is not None:
+                        progress_text = f"{message} ({current}/{total})"
+                    else:
+                        progress_text = message
+                    spinner.update(text=Text(progress_text, style="cyan"))
+                
+                result = perform_ssl_check(
+                    hostname=hostname,
+                    port=port,
+                    timeout=timeout,
+                    insecure=insecure,
+                    skip_chain=skip_chain,
+                    skip_hostname=skip_hostname,
+                    skip_protocol=skip_protocol,
+                    skip_cipher=skip_cipher,
+                    vulnerabilities=vulnerabilities,
+                    vulnerability_list=vulnerability_list,
+                    skip_security=skip_security,
+                    only_checks=only_checks,
+                    ca_bundle=ca_bundle,
+                    ipv6=ipv6,
+                    proxy=proxy,
+                    no_redirects=no_redirects,
+                    max_crl_bytes=max_crl_bytes,
+                    service=service,
+                    progress_callback=update_progress,
+                )
+        except Exception as e:
+            # Fallback if rich Live fails
+            logger.debug(f"Progress indicator failed: {e}")
+            result = perform_ssl_check(
+                hostname=hostname,
+                port=port,
+                timeout=timeout,
+                insecure=insecure,
+                skip_chain=skip_chain,
+                skip_hostname=skip_hostname,
+                skip_protocol=skip_protocol,
+                skip_cipher=skip_cipher,
+                vulnerabilities=vulnerabilities,
+                vulnerability_list=vulnerability_list,
+                skip_security=skip_security,
+                only_checks=only_checks,
+                ca_bundle=ca_bundle,
+                ipv6=ipv6,
+                proxy=proxy,
+                no_redirects=no_redirects,
+                max_crl_bytes=max_crl_bytes,
+                service=service,
+            )
+    else:
+        result = perform_ssl_check(
         hostname=hostname,
         port=port,
         timeout=timeout,
@@ -679,9 +805,6 @@ def check(
     )
 
     # Generate and output report
-    # Handle OptionInfo objects when function is called directly (not via CLI)
-    html_path = html if isinstance(html, (Path, type(None))) else None
-    csv_path = csv if isinstance(csv, (Path, type(None))) else None
     
     if html_path:
         html_report = generate_html_report(result)
