@@ -422,6 +422,70 @@ def _generate_certificate_section(result: CheckResult) -> str:
             </div>
     """
     
+    # Certificate Chain Details - Show all certificates
+    html += """
+            <div class="check-item">
+                <div class="check-label"><strong>Certificate Chain Details:</strong></div>
+                <div class="check-value">
+                    <h3>Leaf Certificate</h3>
+                    <div style="margin-left: 20px; margin-bottom: 15px;">
+                        <strong>Subject:</strong> """ + result.chain_check.leaf_cert.subject + """<br>
+                        <strong>Issuer:</strong> """ + result.chain_check.leaf_cert.issuer + """<br>
+                        <strong>Serial Number:</strong> """ + str(result.chain_check.leaf_cert.serial_number) + """
+                    </div>
+    """
+    
+    # Intermediate certificates
+    if result.chain_check.intermediate_certs:
+        html += f"""
+                    <h3>Intermediate Certificates ({len(result.chain_check.intermediate_certs)})</h3>
+        """
+        for idx, intermediate in enumerate(result.chain_check.intermediate_certs, 1):
+            html += f"""
+                    <div style="margin-left: 20px; margin-bottom: 15px;">
+                        <strong>Intermediate {idx}:</strong><br>
+                        <strong>Subject:</strong> {intermediate.subject}<br>
+                        <strong>Issuer:</strong> {intermediate.issuer}<br>
+                        <strong>Serial Number:</strong> {intermediate.serial_number}
+                    </div>
+            """
+    
+    # Cross-signed certificates (show as they were in the original chain)
+    if result.chain_check.cross_signed_certs:
+        html += f"""
+                    <h3>Cross-Signed Certificates ({len(result.chain_check.cross_signed_certs)})</h3>
+                    <div style="margin-left: 20px; margin-bottom: 15px; font-style: italic; color: #666;">
+                        Note: These certificates were replaced by trust store roots (see Cross-Signing Resolution below)
+                    </div>
+        """
+        for idx, cross_signed in enumerate(result.chain_check.cross_signed_certs, 1):
+            html += f"""
+                    <div style="margin-left: 20px; margin-bottom: 15px;">
+                        <strong>Cross-Signed Certificate {idx}:</strong><br>
+                        <strong>Subject:</strong> {cross_signed.chain_cert.subject}<br>
+                        <strong>Issuer:</strong> {cross_signed.chain_cert.issuer}<br>
+                        <strong>Serial Number:</strong> {cross_signed.chain_cert.serial_number}<br>
+                        <strong>Actual Signer:</strong> {cross_signed.actual_signer}<br>
+                        <strong>Replaced by:</strong> {cross_signed.trust_store_root.subject} (Trust Store Root)
+                    </div>
+            """
+    
+    # Root certificate
+    if result.chain_check.root_cert:
+        html += f"""
+                    <h3>Root Certificate</h3>
+                    <div style="margin-left: 20px; margin-bottom: 15px;">
+                        <strong>Subject:</strong> {result.chain_check.root_cert.subject}<br>
+                        <strong>Issuer:</strong> {result.chain_check.root_cert.issuer}<br>
+                        <strong>Serial Number:</strong> {result.chain_check.root_cert.serial_number}
+                    </div>
+        """
+    
+    html += """
+                </div>
+            </div>
+    """
+    
     # Hostname Check
     hostname_severity = result.hostname_check.severity.value.lower()
     html += f"""

@@ -408,44 +408,6 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
                 for reason in result.rating_reasons:
                     lines.append(f"    - {reason}")
         
-        # Notes on Security Best Practices (only if not according to recommendations)
-        hints = []
-        if result.security_check:
-            # HSTS: Recommendation = enabled
-            if not result.security_check.hsts_enabled:
-                hints.append("HSTS not enabled (recommended for better security)")
-            
-            # OCSP Stapling: Recommendation = enabled
-            if not result.security_check.ocsp_stapling_enabled:
-                hints.append("OCSP Stapling not enabled (recommended for better performance)")
-            
-            # TLS Compression: Recommendation = disabled
-            if result.security_check.tls_compression_enabled:
-                hints.append("TLS Compression enabled (should be disabled - CRIME vulnerability)")
-            
-            # Session Resumption: Recommendation = enabled
-            if not result.security_check.session_resumption_enabled:
-                hints.append("Session Resumption not enabled (recommended for better performance)")
-        
-        # Note about AIA fetching (informational)
-        if result.chain_check.intermediates_fetched_via_aia:
-            count = result.chain_check.intermediates_fetched_count
-            if result.service_type and result.service_type in ["SMTP", "IMAP", "POP3"]:
-                hints.append(
-                    f"{count} intermediate certificate(s) were fetched via AIA because the server did not send a complete certificate chain "
-                    f"(common for {result.service_type} STARTTLS connections)"
-                )
-            else:
-                hints.append(
-                    f"{count} intermediate certificate(s) were fetched via AIA because the server did not send a complete certificate chain "
-                    f"(handled automatically via AIA)"
-                )
-        
-        if hints:
-            lines.append("  Notes:")
-            for hint in hints:
-                lines.append(f"    - {hint}")
-        
         lines.append(f"  Overall Status: {_format_severity(result.overall_severity)}")
         if result.summary:
             lines.append(f"  {result.summary}")
