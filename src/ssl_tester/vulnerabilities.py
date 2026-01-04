@@ -1,11 +1,15 @@
 """Cryptographic vulnerability detection."""
 
 import logging
-import ssl
-import socket
 from typing import List, Optional
 
 from ssl_tester.models import VulnerabilityCheckResult, Severity
+from ssl_tester.nmap_helper import (
+    ensure_nmap_available,
+    run_nmap_script,
+    parse_nmap_output,
+    get_nmap_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +21,9 @@ def check_heartbleed(host: str, port: int, timeout: float = 10.0) -> Vulnerabili
     Heartbleed is a vulnerability in OpenSSL's heartbeat extension that allows
     reading memory from the server.
     
+    Requires nmap to be installed. Returns a result indicating test was skipped
+    if nmap is not available.
+    
     Args:
         host: Target hostname
         port: Target port
@@ -27,50 +34,62 @@ def check_heartbleed(host: str, port: int, timeout: float = 10.0) -> Vulnerabili
     """
     logger.debug(f"Checking Heartbleed vulnerability for {host}:{port}")
     
+    nmap_path = get_nmap_path()
+    if not nmap_path:
+        logger.warning("nmap not available - Heartbleed test skipped")
+        return VulnerabilityCheckResult(
+            vulnerability_name="Heartbleed",
+            cve_id="CVE-2014-0160",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="OpenSSL Heartbeat Extension vulnerability that allows reading server memory (test skipped - nmap required)",
+            recommendation="Install nmap to enable Heartbleed testing",
+        )
+    
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect((host, port))
+        success, stdout, stderr = run_nmap_script(
+            host, port, "ssl-heartbleed", timeout
+        )
+        if not success:
+            logger.warning(f"nmap Heartbleed check failed: {stderr}")
+            return VulnerabilityCheckResult(
+                vulnerability_name="Heartbleed",
+                cve_id="CVE-2014-0160",
+                vulnerable=False,
+                severity=Severity.OK,
+                description="OpenSSL Heartbeat Extension vulnerability that allows reading server memory (test failed - nmap error)",
+                recommendation="Check nmap installation and network connectivity",
+            )
         
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+        parsed = parse_nmap_output(stdout, "ssl-heartbleed")
+        vulnerable = parsed["vulnerable"]
+        details = " ".join(parsed["details"]) if parsed["details"] else ""
         
-        ssl_sock = context.wrap_socket(sock, server_hostname=host)
-        ssl_sock.do_handshake()
-        
-        # Check if heartbeat extension is supported
-        # Note: Python's ssl module doesn't expose heartbeat directly
-        # This is a simplified check - a full implementation would need
-        # to send a heartbeat request and check the response
-        negotiated_version = ssl_sock.version()
-        
-        # Heartbleed affects OpenSSL 1.0.1 through 1.0.1f
-        # We can't directly check the OpenSSL version, but we can check
-        # if the server responds to heartbeat requests
-        # For now, we'll mark as not vulnerable if we can't detect it
-        vulnerable = False
-        
-        ssl_sock.close()
-        sock.close()
+        description = (
+            "OpenSSL Heartbeat Extension vulnerability that allows reading server memory"
+        )
+        if details:
+            description += f" - {details}"
+        if parsed["state"] == "UNKNOWN":
+            description += " (nmap check completed, no vulnerability detected)"
         
         return VulnerabilityCheckResult(
             vulnerability_name="Heartbleed",
             cve_id="CVE-2014-0160",
             vulnerable=vulnerable,
-            severity=Severity.OK if not vulnerable else Severity.FAIL,
-            description="OpenSSL Heartbeat Extension vulnerability that allows reading server memory",
+            severity=Severity.FAIL if vulnerable else Severity.OK,
+            description=description,
             recommendation="Update OpenSSL to version 1.0.1g or later" if vulnerable else None,
         )
     except Exception as e:
-        logger.debug(f"Error checking Heartbleed: {e}")
+        logger.error(f"Error running nmap Heartbleed check: {e}")
         return VulnerabilityCheckResult(
             vulnerability_name="Heartbleed",
             cve_id="CVE-2014-0160",
-            vulnerable=False,  # Assume not vulnerable if we can't check
+            vulnerable=False,
             severity=Severity.OK,
-            description="OpenSSL Heartbeat Extension vulnerability that allows reading server memory",
-            recommendation=None,
+            description="OpenSSL Heartbeat Extension vulnerability that allows reading server memory (test failed)",
+            recommendation="Check nmap installation",
         )
 
 
@@ -80,6 +99,9 @@ def check_poodle(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCh
     
     POODLE (Padding Oracle On Downgraded Legacy Encryption) is a vulnerability
     in SSL 3.0 that allows decryption of encrypted data.
+    
+    Requires nmap to be installed. Returns a result indicating test was skipped
+    if nmap is not available.
     
     Args:
         host: Target hostname
@@ -91,95 +113,61 @@ def check_poodle(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCh
     """
     logger.debug(f"Checking POODLE vulnerability for {host}:{port}")
     
-    # Check if SSL 3.0 is supported
-    vulnerable = False
-    if hasattr(ssl, "PROTOCOL_SSLv3"):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
-            sock.connect((host, port))
-            
-            context = ssl.SSLContext(ssl.PROTOCOL_SSLv3)
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            
-            ssl_sock = context.wrap_socket(sock, server_hostname=host)
-            ssl_sock.do_handshake()
-            vulnerable = True
-            ssl_sock.close()
-            sock.close()
-        except (ssl.SSLError, socket.timeout, ConnectionError):
-            vulnerable = False
-        except Exception as e:
-            logger.debug(f"Error checking POODLE: {e}")
-            vulnerable = False
+    nmap_path = get_nmap_path()
+    if not nmap_path:
+        logger.warning("nmap not available - POODLE test skipped")
+        return VulnerabilityCheckResult(
+            vulnerability_name="POODLE",
+            cve_id="CVE-2014-3566",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="SSL 3.0 Padding Oracle vulnerability that allows decryption of encrypted data (test skipped - nmap required)",
+            recommendation="Install nmap to enable POODLE testing",
+        )
     
-    return VulnerabilityCheckResult(
-        vulnerability_name="POODLE",
-        cve_id="CVE-2014-3566",
-        vulnerable=vulnerable,
-        severity=Severity.FAIL if vulnerable else Severity.OK,
-        description="SSL 3.0 Padding Oracle vulnerability that allows decryption of encrypted data",
-        recommendation="Disable SSL 3.0 support" if vulnerable else None,
-    )
-
-
-def check_beast(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCheckResult:
-    """
-    Check for BEAST vulnerability (CVE-2011-3389).
-    
-    BEAST (Browser Exploit Against SSL/TLS) is a vulnerability in TLS 1.0
-    that allows decryption of encrypted data when using CBC mode ciphers.
-    
-    Args:
-        host: Target hostname
-        port: Target port
-        timeout: Connection timeout
+    try:
+        success, stdout, stderr = run_nmap_script(
+            host, port, "ssl-poodle", timeout
+        )
+        if not success:
+            logger.warning(f"nmap POODLE check failed: {stderr}")
+            return VulnerabilityCheckResult(
+                vulnerability_name="POODLE",
+                cve_id="CVE-2014-3566",
+                vulnerable=False,
+                severity=Severity.OK,
+                description="SSL 3.0 Padding Oracle vulnerability that allows decryption of encrypted data (test failed - nmap error)",
+                recommendation="Check nmap installation and network connectivity",
+            )
         
-    Returns:
-        VulnerabilityCheckResult
-    """
-    logger.debug(f"Checking BEAST vulnerability for {host}:{port}")
-    
-    # Check if TLS 1.0 is supported
-    vulnerable = False
-    if hasattr(ssl, "PROTOCOL_TLSv1"):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
-            sock.connect((host, port))
-            
-            context = ssl.SSLContext(ssl.PROTOCOL_TLSv1)
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            
-            ssl_sock = context.wrap_socket(sock, server_hostname=host)
-            ssl_sock.do_handshake()
-            
-            # Check if CBC ciphers are used
-            cipher = ssl_sock.cipher()
-            if cipher:
-                cipher_name = cipher[0].upper()
-                # BEAST affects CBC mode ciphers
-                if "CBC" in cipher_name or any(c in cipher_name for c in ["AES", "DES", "3DES"]):
-                    vulnerable = True
-            
-            ssl_sock.close()
-            sock.close()
-        except (ssl.SSLError, socket.timeout, ConnectionError):
-            vulnerable = False
-        except Exception as e:
-            logger.debug(f"Error checking BEAST: {e}")
-            vulnerable = False
-    
-    return VulnerabilityCheckResult(
-        vulnerability_name="BEAST",
-        cve_id="CVE-2011-3389",
-        vulnerable=vulnerable,
-        severity=Severity.WARN if vulnerable else Severity.OK,  # WARN because TLS 1.0 is deprecated
-        description="TLS 1.0 CBC mode vulnerability that allows decryption of encrypted data",
-        recommendation="Disable TLS 1.0 or use RC4 ciphers (though RC4 is also deprecated)" if vulnerable else None,
-    )
+        parsed = parse_nmap_output(stdout, "ssl-poodle")
+        vulnerable = parsed["vulnerable"]
+        details = " ".join(parsed["details"]) if parsed["details"] else ""
+        
+        description = "SSL 3.0 Padding Oracle vulnerability that allows decryption of encrypted data"
+        if details:
+            description += f" - {details}"
+        if parsed["state"] == "UNKNOWN":
+            description += " (nmap check completed, no vulnerability detected)"
+        
+        return VulnerabilityCheckResult(
+            vulnerability_name="POODLE",
+            cve_id="CVE-2014-3566",
+            vulnerable=vulnerable,
+            severity=Severity.FAIL if vulnerable else Severity.OK,
+            description=description,
+            recommendation="Disable SSL 3.0 support" if vulnerable else None,
+        )
+    except Exception as e:
+        logger.error(f"Error running nmap POODLE check: {e}")
+        return VulnerabilityCheckResult(
+            vulnerability_name="POODLE",
+            cve_id="CVE-2014-3566",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="SSL 3.0 Padding Oracle vulnerability that allows decryption of encrypted data (test failed)",
+            recommendation="Check nmap installation",
+        )
 
 
 def check_freak(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCheckResult:
@@ -188,6 +176,9 @@ def check_freak(host: str, port: int, timeout: float = 10.0) -> VulnerabilityChe
     
     FREAK (Factoring Attack on RSA-EXPORT Keys) is a vulnerability that allows
     man-in-the-middle attacks by forcing servers to use weak export-grade RSA keys.
+    
+    Requires nmap to be installed. Returns a result indicating test was skipped
+    if nmap is not available.
     
     Args:
         host: Target hostname
@@ -199,42 +190,61 @@ def check_freak(host: str, port: int, timeout: float = 10.0) -> VulnerabilityChe
     """
     logger.debug(f"Checking FREAK vulnerability for {host}:{port}")
     
-    # Check if export-grade ciphers are supported
-    # This is a simplified check - a full implementation would need to
-    # test for export-grade cipher support
-    vulnerable = False
+    nmap_path = get_nmap_path()
+    if not nmap_path:
+        logger.warning("nmap not available - FREAK test skipped")
+        return VulnerabilityCheckResult(
+            vulnerability_name="FREAK",
+            cve_id="CVE-2015-0204",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="Export-grade RSA key vulnerability that allows man-in-the-middle attacks (test skipped - nmap required)",
+            recommendation="Install nmap to enable FREAK testing",
+        )
     
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect((host, port))
+        success, stdout, stderr = run_nmap_script(
+            host, port, "ssl-freak", timeout
+        )
+        if not success:
+            logger.warning(f"nmap FREAK check failed: {stderr}")
+            return VulnerabilityCheckResult(
+                vulnerability_name="FREAK",
+                cve_id="CVE-2015-0204",
+                vulnerable=False,
+                severity=Severity.OK,
+                description="Export-grade RSA key vulnerability that allows man-in-the-middle attacks (test failed - nmap error)",
+                recommendation="Check nmap installation and network connectivity",
+            )
         
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+        parsed = parse_nmap_output(stdout, "ssl-freak")
+        vulnerable = parsed["vulnerable"]
+        details = " ".join(parsed["details"]) if parsed["details"] else ""
         
-        ssl_sock = context.wrap_socket(sock, server_hostname=host)
-        ssl_sock.do_handshake()
+        description = "Export-grade RSA key vulnerability that allows man-in-the-middle attacks"
+        if details:
+            description += f" - {details}"
+        if parsed["state"] == "UNKNOWN":
+            description += " (nmap check completed, no vulnerability detected)"
         
-        cipher = ssl_sock.cipher()
-        if cipher:
-            cipher_name = cipher[0].upper()
-            if "EXPORT" in cipher_name:
-                vulnerable = True
-        
-        ssl_sock.close()
-        sock.close()
+        return VulnerabilityCheckResult(
+            vulnerability_name="FREAK",
+            cve_id="CVE-2015-0204",
+            vulnerable=vulnerable,
+            severity=Severity.FAIL if vulnerable else Severity.OK,
+            description=description,
+            recommendation="Disable export-grade cipher suites" if vulnerable else None,
+        )
     except Exception as e:
-        logger.debug(f"Error checking FREAK: {e}")
-    
-    return VulnerabilityCheckResult(
-        vulnerability_name="FREAK",
-        cve_id="CVE-2015-0204",
-        vulnerable=vulnerable,
-        severity=Severity.FAIL if vulnerable else Severity.OK,
-        description="Export-grade RSA key vulnerability that allows man-in-the-middle attacks",
-        recommendation="Disable export-grade cipher suites" if vulnerable else None,
-    )
+        logger.error(f"Error running nmap FREAK check: {e}")
+        return VulnerabilityCheckResult(
+            vulnerability_name="FREAK",
+            cve_id="CVE-2015-0204",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="Export-grade RSA key vulnerability that allows man-in-the-middle attacks (test failed)",
+            recommendation="Check nmap installation",
+        )
 
 
 def check_drown(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCheckResult:
@@ -243,6 +253,9 @@ def check_drown(host: str, port: int, timeout: float = 10.0) -> VulnerabilityChe
     
     DROWN (Decrypting RSA with Obsolete and Weakened eNcryption) is a vulnerability
     that allows decryption of TLS connections by exploiting SSLv2.
+    
+    Requires nmap to be installed. Returns a result indicating test was skipped
+    if nmap is not available.
     
     Args:
         host: Target hostname
@@ -254,37 +267,61 @@ def check_drown(host: str, port: int, timeout: float = 10.0) -> VulnerabilityChe
     """
     logger.debug(f"Checking DROWN vulnerability for {host}:{port}")
     
-    # Check if SSLv2 is supported
-    vulnerable = False
-    if hasattr(ssl, "PROTOCOL_SSLv2"):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
-            sock.connect((host, port))
-            
-            context = ssl.SSLContext(ssl.PROTOCOL_SSLv2)
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            
-            ssl_sock = context.wrap_socket(sock, server_hostname=host)
-            ssl_sock.do_handshake()
-            vulnerable = True
-            ssl_sock.close()
-            sock.close()
-        except (ssl.SSLError, socket.timeout, ConnectionError):
-            vulnerable = False
-        except Exception as e:
-            logger.debug(f"Error checking DROWN: {e}")
-            vulnerable = False
+    nmap_path = get_nmap_path()
+    if not nmap_path:
+        logger.warning("nmap not available - DROWN test skipped")
+        return VulnerabilityCheckResult(
+            vulnerability_name="DROWN",
+            cve_id="CVE-2016-0800",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="SSLv2 vulnerability that allows decryption of TLS connections (test skipped - nmap required)",
+            recommendation="Install nmap to enable DROWN testing",
+        )
     
-    return VulnerabilityCheckResult(
-        vulnerability_name="DROWN",
-        cve_id="CVE-2016-0800",
-        vulnerable=vulnerable,
-        severity=Severity.FAIL if vulnerable else Severity.OK,
-        description="SSLv2 vulnerability that allows decryption of TLS connections",
-        recommendation="Disable SSLv2 support completely" if vulnerable else None,
-    )
+    try:
+        success, stdout, stderr = run_nmap_script(
+            host, port, "ssl-drown", timeout
+        )
+        if not success:
+            logger.warning(f"nmap DROWN check failed: {stderr}")
+            return VulnerabilityCheckResult(
+                vulnerability_name="DROWN",
+                cve_id="CVE-2016-0800",
+                vulnerable=False,
+                severity=Severity.OK,
+                description="SSLv2 vulnerability that allows decryption of TLS connections (test failed - nmap error)",
+                recommendation="Check nmap installation and network connectivity",
+            )
+        
+        parsed = parse_nmap_output(stdout, "ssl-drown")
+        vulnerable = parsed["vulnerable"]
+        details = " ".join(parsed["details"]) if parsed["details"] else ""
+        
+        description = "SSLv2 vulnerability that allows decryption of TLS connections"
+        if details:
+            description += f" - {details}"
+        if parsed["state"] == "UNKNOWN":
+            description += " (nmap check completed, no vulnerability detected)"
+        
+        return VulnerabilityCheckResult(
+            vulnerability_name="DROWN",
+            cve_id="CVE-2016-0800",
+            vulnerable=vulnerable,
+            severity=Severity.FAIL if vulnerable else Severity.OK,
+            description=description,
+            recommendation="Disable SSLv2 support completely" if vulnerable else None,
+        )
+    except Exception as e:
+        logger.error(f"Error running nmap DROWN check: {e}")
+        return VulnerabilityCheckResult(
+            vulnerability_name="DROWN",
+            cve_id="CVE-2016-0800",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="SSLv2 vulnerability that allows decryption of TLS connections (test failed)",
+            recommendation="Check nmap installation",
+        )
 
 
 def check_sweet32(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCheckResult:
@@ -293,6 +330,9 @@ def check_sweet32(host: str, port: int, timeout: float = 10.0) -> VulnerabilityC
     
     Sweet32 is a vulnerability in 64-bit block ciphers (3DES, Blowfish) that allows
     birthday attacks on CBC mode encryption.
+    
+    Requires nmap to be installed. Returns a result indicating test was skipped
+    if nmap is not available.
     
     Args:
         host: Target hostname
@@ -304,155 +344,63 @@ def check_sweet32(host: str, port: int, timeout: float = 10.0) -> VulnerabilityC
     """
     logger.debug(f"Checking Sweet32 vulnerability for {host}:{port}")
     
-    vulnerable = False
+    nmap_path = get_nmap_path()
+    if not nmap_path:
+        logger.warning("nmap not available - Sweet32 test skipped")
+        return VulnerabilityCheckResult(
+            vulnerability_name="Sweet32",
+            cve_id="CVE-2016-2183",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="64-bit block cipher vulnerability that allows birthday attacks on CBC mode (test skipped - nmap required)",
+            recommendation="Install nmap to enable Sweet32 testing",
+        )
     
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect((host, port))
+        success, stdout, stderr = run_nmap_script(
+            host, port, "ssl-enum-ciphers", timeout
+        )
+        if not success:
+            logger.warning(f"nmap Sweet32 check failed: {stderr}")
+            return VulnerabilityCheckResult(
+                vulnerability_name="Sweet32",
+                cve_id="CVE-2016-2183",
+                vulnerable=False,
+                severity=Severity.OK,
+                description="64-bit block cipher vulnerability that allows birthday attacks on CBC mode (test failed - nmap error)",
+                recommendation="Check nmap installation and network connectivity",
+            )
         
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+        # Check for 3DES, DES, or Blowfish in cipher list
+        vulnerable = False
+        output_upper = stdout.upper()
+        if "3DES" in output_upper or "DES-CBC" in output_upper or "BLOWFISH" in output_upper:
+            vulnerable = True
         
-        ssl_sock = context.wrap_socket(sock, server_hostname=host)
-        ssl_sock.do_handshake()
+        description = "64-bit block cipher vulnerability that allows birthday attacks on CBC mode"
+        if vulnerable:
+            description += " - 3DES/DES/Blowfish ciphers detected"
+        else:
+            description += " (nmap check completed, no 64-bit block ciphers detected)"
         
-        cipher = ssl_sock.cipher()
-        if cipher:
-            cipher_name = cipher[0].upper()
-            # Check for 3DES or other 64-bit block ciphers
-            if "3DES" in cipher_name or "DES" in cipher_name or "BLOWFISH" in cipher_name:
-                vulnerable = True
-        
-        ssl_sock.close()
-        sock.close()
+        return VulnerabilityCheckResult(
+            vulnerability_name="Sweet32",
+            cve_id="CVE-2016-2183",
+            vulnerable=vulnerable,
+            severity=Severity.WARN if vulnerable else Severity.OK,
+            description=description,
+            recommendation="Disable 3DES and other 64-bit block ciphers" if vulnerable else None,
+        )
     except Exception as e:
-        logger.debug(f"Error checking Sweet32: {e}")
-    
-    return VulnerabilityCheckResult(
-        vulnerability_name="Sweet32",
-        cve_id="CVE-2016-2183",
-        vulnerable=vulnerable,
-        severity=Severity.WARN if vulnerable else Severity.OK,
-        description="64-bit block cipher vulnerability that allows birthday attacks on CBC mode",
-        recommendation="Disable 3DES and other 64-bit block ciphers" if vulnerable else None,
-    )
-
-
-def check_lucky13(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCheckResult:
-    """
-    Check for Lucky13 vulnerability (CVE-2013-0169).
-    
-    Lucky13 is a timing attack vulnerability in CBC mode ciphers that allows
-    decryption of encrypted data.
-    
-    Args:
-        host: Target hostname
-        port: Target port
-        timeout: Connection timeout
-        
-    Returns:
-        VulnerabilityCheckResult
-    """
-    logger.debug(f"Checking Lucky13 vulnerability for {host}:{port}")
-    
-    # Lucky13 affects CBC mode ciphers
-    # This is a simplified check - a full implementation would need to
-    # test for timing attacks
-    vulnerable = False
-    
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect((host, port))
-        
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        
-        ssl_sock = context.wrap_socket(sock, server_hostname=host)
-        ssl_sock.do_handshake()
-        
-        cipher = ssl_sock.cipher()
-        if cipher:
-            cipher_name = cipher[0].upper()
-            # Lucky13 affects CBC mode ciphers
-            if "CBC" in cipher_name or any(c in cipher_name for c in ["AES", "DES", "3DES"]):
-                # Check if TLS version is vulnerable (TLS 1.0, 1.1, 1.2)
-                version = ssl_sock.version()
-                if version in ["TLSv1", "TLSv1.1", "TLSv1.2"]:
-                    vulnerable = True
-        
-        ssl_sock.close()
-        sock.close()
-    except Exception as e:
-        logger.debug(f"Error checking Lucky13: {e}")
-    
-    return VulnerabilityCheckResult(
-        vulnerability_name="Lucky13",
-        cve_id="CVE-2013-0169",
-        vulnerable=vulnerable,
-        severity=Severity.WARN if vulnerable else Severity.OK,
-        description="CBC mode timing attack vulnerability that allows decryption of encrypted data",
-        recommendation="Use TLS 1.3 or disable CBC mode ciphers" if vulnerable else None,
-    )
-
-
-def check_robot(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCheckResult:
-    """
-    Check for ROBOT vulnerability (CVE-2017-13099).
-    
-    ROBOT (Return Of Bleichenbacher's Oracle Threat) is a vulnerability in
-    RSA PKCS#1 v1.5 padding that allows decryption of encrypted data.
-    
-    Args:
-        host: Target hostname
-        port: Target port
-        timeout: Connection timeout
-        
-    Returns:
-        VulnerabilityCheckResult
-    """
-    logger.debug(f"Checking ROBOT vulnerability for {host}:{port}")
-    
-    # ROBOT affects RSA key exchange
-    # This is a simplified check - a full implementation would need to
-    # test for padding oracle attacks
-    vulnerable = False
-    
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect((host, port))
-        
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        
-        ssl_sock = context.wrap_socket(sock, server_hostname=host)
-        ssl_sock.do_handshake()
-        
-        cipher = ssl_sock.cipher()
-        if cipher:
-            cipher_name = cipher[0].upper()
-            # ROBOT affects RSA key exchange (not DHE/ECDHE)
-            if "RSA" in cipher_name and "DHE" not in cipher_name and "ECDHE" not in cipher_name:
-                vulnerable = True
-        
-        ssl_sock.close()
-        sock.close()
-    except Exception as e:
-        logger.debug(f"Error checking ROBOT: {e}")
-    
-    return VulnerabilityCheckResult(
-        vulnerability_name="ROBOT",
-        cve_id="CVE-2017-13099",
-        vulnerable=vulnerable,
-        severity=Severity.WARN if vulnerable else Severity.OK,
-        description="RSA PKCS#1 v1.5 padding oracle vulnerability that allows decryption of encrypted data",
-        recommendation="Use RSA-OAEP or ECDHE/EDH key exchange" if vulnerable else None,
-    )
+        logger.error(f"Error running nmap Sweet32 check: {e}")
+        return VulnerabilityCheckResult(
+            vulnerability_name="Sweet32",
+            cve_id="CVE-2016-2183",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="64-bit block cipher vulnerability that allows birthday attacks on CBC mode (test failed)",
+            recommendation="Check nmap installation",
+        )
 
 
 def check_ticketbleed(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCheckResult:
@@ -461,6 +409,9 @@ def check_ticketbleed(host: str, port: int, timeout: float = 10.0) -> Vulnerabil
     
     Ticketbleed is a vulnerability in TLS session ticket handling that allows
     reading memory from the server.
+    
+    Requires nmap to be installed. Returns a result indicating test was skipped
+    if nmap is not available.
     
     Args:
         host: Target hostname
@@ -472,22 +423,61 @@ def check_ticketbleed(host: str, port: int, timeout: float = 10.0) -> Vulnerabil
     """
     logger.debug(f"Checking Ticketbleed vulnerability for {host}:{port}")
     
-    # Ticketbleed affects F5 BIG-IP devices
-    # This is a simplified check - a full implementation would need to
-    # test for session ticket handling issues
-    vulnerable = False
+    nmap_path = get_nmap_path()
+    if not nmap_path:
+        logger.warning("nmap not available - Ticketbleed test skipped")
+        return VulnerabilityCheckResult(
+            vulnerability_name="Ticketbleed",
+            cve_id="CVE-2016-9244",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="TLS session ticket handling vulnerability that allows reading server memory (test skipped - nmap required)",
+            recommendation="Install nmap to enable Ticketbleed testing",
+        )
     
-    # Note: Full implementation would require testing session ticket handling
-    # For now, we'll mark as not vulnerable if we can't detect it
-    
-    return VulnerabilityCheckResult(
-        vulnerability_name="Ticketbleed",
-        cve_id="CVE-2016-9244",
-        vulnerable=vulnerable,
-        severity=Severity.OK if not vulnerable else Severity.FAIL,
-        description="TLS session ticket handling vulnerability that allows reading server memory",
-        recommendation="Update F5 BIG-IP firmware or disable session tickets" if vulnerable else None,
-    )
+    try:
+        success, stdout, stderr = run_nmap_script(
+            host, port, "ssl-ticketbleed", timeout
+        )
+        if not success:
+            logger.warning(f"nmap Ticketbleed check failed: {stderr}")
+            return VulnerabilityCheckResult(
+                vulnerability_name="Ticketbleed",
+                cve_id="CVE-2016-9244",
+                vulnerable=False,
+                severity=Severity.OK,
+                description="TLS session ticket handling vulnerability that allows reading server memory (test failed - nmap error)",
+                recommendation="Check nmap installation and network connectivity",
+            )
+        
+        parsed = parse_nmap_output(stdout, "ssl-ticketbleed")
+        vulnerable = parsed["vulnerable"]
+        details = " ".join(parsed["details"]) if parsed["details"] else ""
+        
+        description = "TLS session ticket handling vulnerability that allows reading server memory"
+        if details:
+            description += f" - {details}"
+        if parsed["state"] == "UNKNOWN":
+            description += " (nmap check completed, no vulnerability detected)"
+        
+        return VulnerabilityCheckResult(
+            vulnerability_name="Ticketbleed",
+            cve_id="CVE-2016-9244",
+            vulnerable=vulnerable,
+            severity=Severity.FAIL if vulnerable else Severity.OK,
+            description=description,
+            recommendation="Update F5 BIG-IP firmware or disable session tickets" if vulnerable else None,
+        )
+    except Exception as e:
+        logger.error(f"Error running nmap Ticketbleed check: {e}")
+        return VulnerabilityCheckResult(
+            vulnerability_name="Ticketbleed",
+            cve_id="CVE-2016-9244",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="TLS session ticket handling vulnerability that allows reading server memory (test failed)",
+            recommendation="Check nmap installation",
+        )
 
 
 def check_logjam(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCheckResult:
@@ -496,6 +486,9 @@ def check_logjam(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCh
     
     Logjam is a vulnerability in Diffie-Hellman key exchange that allows
     man-in-the-middle attacks when using weak DH parameters.
+    
+    Requires nmap to be installed. Returns a result indicating test was skipped
+    if nmap is not available.
     
     Args:
         host: Target hostname
@@ -507,53 +500,76 @@ def check_logjam(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCh
     """
     logger.debug(f"Checking Logjam vulnerability for {host}:{port}")
     
-    # Logjam affects weak DH parameters (< 1024 bits)
-    # This is a simplified check - a full implementation would need to
-    # test for weak DH parameters
-    vulnerable = False
+    nmap_path = get_nmap_path()
+    if not nmap_path:
+        logger.warning("nmap not available - Logjam test skipped")
+        return VulnerabilityCheckResult(
+            vulnerability_name="Logjam",
+            cve_id="CVE-2015-4000",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="Weak Diffie-Hellman parameters vulnerability that allows man-in-the-middle attacks (test skipped - nmap required)",
+            recommendation="Install nmap to enable Logjam testing",
+        )
     
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect((host, port))
+        success, stdout, stderr = run_nmap_script(
+            host, port, "ssl-dh-params", timeout
+        )
+        if not success:
+            logger.warning(f"nmap Logjam check failed: {stderr}")
+            return VulnerabilityCheckResult(
+                vulnerability_name="Logjam",
+                cve_id="CVE-2015-4000",
+                vulnerable=False,
+                severity=Severity.OK,
+                description="Weak Diffie-Hellman parameters vulnerability that allows man-in-the-middle attacks (test failed - nmap error)",
+                recommendation="Check nmap installation and network connectivity",
+            )
         
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+        parsed = parse_nmap_output(stdout, "ssl-dh-params")
+        vulnerable = parsed["vulnerable"]
+        details = " ".join(parsed["details"]) if parsed["details"] else ""
         
-        ssl_sock = context.wrap_socket(sock, server_hostname=host)
-        ssl_sock.do_handshake()
+        # Check for weak DH parameters in output
+        if "1024" in stdout or "512" in stdout:
+            vulnerable = True
         
-        cipher = ssl_sock.cipher()
-        if cipher:
-            cipher_name = cipher[0].upper()
-            # Logjam affects DHE key exchange with weak parameters
-            if "DHE" in cipher_name:
-                # Note: We can't directly check DH parameter strength from Python
-                # A full implementation would need to extract and check DH parameters
-                # For now, we'll assume not vulnerable if we can't detect it
-                vulnerable = False
+        description = "Weak Diffie-Hellman parameters vulnerability that allows man-in-the-middle attacks"
+        if details:
+            description += f" - {details}"
+        if parsed["state"] == "UNKNOWN":
+            description += " (nmap check completed, no vulnerability detected)"
         
-        ssl_sock.close()
-        sock.close()
+        return VulnerabilityCheckResult(
+            vulnerability_name="Logjam",
+            cve_id="CVE-2015-4000",
+            vulnerable=vulnerable,
+            severity=Severity.WARN if vulnerable else Severity.OK,
+            description=description,
+            recommendation="Use DH parameters >= 2048 bits or use ECDHE" if vulnerable else None,
+        )
     except Exception as e:
-        logger.debug(f"Error checking Logjam: {e}")
-    
-    return VulnerabilityCheckResult(
-        vulnerability_name="Logjam",
-        cve_id="CVE-2015-4000",
-        vulnerable=vulnerable,
-        severity=Severity.WARN if vulnerable else Severity.OK,
-        description="Weak Diffie-Hellman parameters vulnerability that allows man-in-the-middle attacks",
-        recommendation="Use DH parameters >= 2048 bits or use ECDHE" if vulnerable else None,
-    )
+        logger.error(f"Error running nmap Logjam check: {e}")
+        return VulnerabilityCheckResult(
+            vulnerability_name="Logjam",
+            cve_id="CVE-2015-4000",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="Weak Diffie-Hellman parameters vulnerability that allows man-in-the-middle attacks (test failed)",
+            recommendation="Check nmap installation",
+        )
 
 
-def check_cryptographic_flaws(
-    host: str, port: int, timeout: float = 10.0
-) -> List[VulnerabilityCheckResult]:
+def check_ccs_injection(host: str, port: int, timeout: float = 10.0) -> VulnerabilityCheckResult:
     """
-    Check for all known cryptographic vulnerabilities.
+    Check for CCS Injection vulnerability (CVE-2014-0224).
+    
+    CCS (Change Cipher Spec) Injection is a vulnerability that allows
+    man-in-the-middle attacks by injecting a ChangeCipherSpec message.
+    
+    Requires nmap to be installed. Returns a result indicating test was skipped
+    if nmap is not available.
     
     Args:
         host: Target hostname
@@ -561,23 +577,159 @@ def check_cryptographic_flaws(
         timeout: Connection timeout
         
     Returns:
+        VulnerabilityCheckResult
+    """
+    logger.debug(f"Checking CCS Injection vulnerability for {host}:{port}")
+    
+    nmap_path = get_nmap_path()
+    if not nmap_path:
+        logger.warning("nmap not available - CCS Injection test skipped")
+        return VulnerabilityCheckResult(
+            vulnerability_name="CCS Injection",
+            cve_id="CVE-2014-0224",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="Change Cipher Spec injection vulnerability that allows man-in-the-middle attacks (test skipped - nmap required)",
+            recommendation="Install nmap to enable CCS Injection testing",
+        )
+    
+    try:
+        success, stdout, stderr = run_nmap_script(
+            host, port, "ssl-ccs-injection", timeout
+        )
+        if not success:
+            logger.warning(f"nmap CCS Injection check failed: {stderr}")
+            return VulnerabilityCheckResult(
+                vulnerability_name="CCS Injection",
+                cve_id="CVE-2014-0224",
+                vulnerable=False,
+                severity=Severity.OK,
+                description="Change Cipher Spec injection vulnerability that allows man-in-the-middle attacks (test failed - nmap error)",
+                recommendation="Check nmap installation and network connectivity",
+            )
+        
+        parsed = parse_nmap_output(stdout, "ssl-ccs-injection")
+        vulnerable = parsed["vulnerable"]
+        details = " ".join(parsed["details"]) if parsed["details"] else ""
+        
+        description = "Change Cipher Spec injection vulnerability that allows man-in-the-middle attacks"
+        if details:
+            description += f" - {details}"
+        if parsed["state"] == "UNKNOWN":
+            description += " (nmap check completed, no vulnerability detected)"
+        
+        return VulnerabilityCheckResult(
+            vulnerability_name="CCS Injection",
+            cve_id="CVE-2014-0224",
+            vulnerable=vulnerable,
+            severity=Severity.FAIL if vulnerable else Severity.OK,
+            description=description,
+            recommendation="Update OpenSSL to version 1.0.1h or later" if vulnerable else None,
+        )
+    except Exception as e:
+        logger.error(f"Error running nmap CCS Injection check: {e}")
+        return VulnerabilityCheckResult(
+            vulnerability_name="CCS Injection",
+            cve_id="CVE-2014-0224",
+            vulnerable=False,
+            severity=Severity.OK,
+            description="Change Cipher Spec injection vulnerability that allows man-in-the-middle attacks (test failed)",
+            recommendation="Check nmap installation",
+        )
+
+
+def check_cryptographic_flaws(
+    host: str,
+    port: int,
+    timeout: float = 10.0,
+    only_vulnerabilities: Optional[List[str]] = None,
+) -> List[VulnerabilityCheckResult]:
+    """
+    Check for all known cryptographic vulnerabilities.
+    
+    All tests require nmap to be installed. Tests are skipped if nmap is not available.
+    
+    Args:
+        host: Target hostname
+        port: Target port
+        timeout: Connection timeout
+        only_vulnerabilities: Optional list of vulnerability names to check.
+                            If None, all vulnerabilities are checked.
+                            Valid names: heartbleed, drown, poodle, ccs-injection, freak, logjam, ticketbleed, sweet32
+        
+    Returns:
         List of VulnerabilityCheckResult
     """
     logger.info(f"Checking cryptographic vulnerabilities for {host}:{port}...")
     
+    # Ensure nmap is available (will attempt download if not found)
+    nmap_available, nmap_path = ensure_nmap_available()
+    if nmap_available:
+        logger.info(f"Using nmap for vulnerability scanning: {nmap_path}")
+    else:
+        logger.warning(
+            "nmap not available - vulnerability tests will be skipped. "
+            "Install nmap for vulnerability testing."
+        )
+    
     results = []
     
-    # Check each vulnerability
-    results.append(check_heartbleed(host, port, timeout))
-    results.append(check_poodle(host, port, timeout))
-    results.append(check_beast(host, port, timeout))
-    results.append(check_freak(host, port, timeout))
-    results.append(check_logjam(host, port, timeout))
-    results.append(check_drown(host, port, timeout))
-    results.append(check_sweet32(host, port, timeout))
-    results.append(check_lucky13(host, port, timeout))
-    results.append(check_robot(host, port, timeout))
-    results.append(check_ticketbleed(host, port, timeout))
+    # Mapping of vulnerability names to check functions (defined here after all functions)
+    VULNERABILITY_CHECKS = {
+        "heartbleed": check_heartbleed,
+        "drown": check_drown,
+        "poodle": check_poodle,
+        "ccs-injection": check_ccs_injection,
+        "ccs": check_ccs_injection,  # Alias
+        "freak": check_freak,
+        "logjam": check_logjam,
+        "ticketbleed": check_ticketbleed,
+        "sweet32": check_sweet32,
+    }
+    
+    # Determine which vulnerabilities to check
+    if only_vulnerabilities:
+        # Normalize vulnerability names (lowercase, handle aliases)
+        normalized_names = [name.lower().strip() for name in only_vulnerabilities]
+        checks_to_run = []
+        
+        for name in normalized_names:
+            if name in VULNERABILITY_CHECKS:
+                checks_to_run.append(VULNERABILITY_CHECKS[name])
+            else:
+                logger.warning(f"Unknown vulnerability name: {name}. Skipping.")
+                logger.info(f"Available vulnerabilities: {', '.join(VULNERABILITY_CHECKS.keys())}")
+    else:
+        # Check all vulnerabilities (default behavior)
+        # Ordered by priority: Critical first, then important, then others
+        checks_to_run = [
+            check_heartbleed,  # Critical
+            check_drown,  # Critical
+            check_poodle,  # High
+            check_ccs_injection,  # High
+            check_freak,  # High
+            check_logjam,  # Medium-High
+            check_ticketbleed,  # Medium (F5 BIG-IP)
+            check_sweet32,  # Low-Medium
+        ]
+    
+    # Run selected checks
+    for check_func in checks_to_run:
+        try:
+            results.append(check_func(host, port, timeout))
+        except Exception as e:
+            logger.error(f"Error running {check_func.__name__}: {e}")
+            # Create a failed result for this check
+            vuln_name = check_func.__name__.replace("check_", "").replace("_", " ").title()
+            results.append(
+                VulnerabilityCheckResult(
+                    vulnerability_name=vuln_name,
+                    cve_id=None,
+                    vulnerable=False,
+                    severity=Severity.OK,
+                    description=f"Test failed: {str(e)}",
+                    recommendation="Check nmap installation and network connectivity",
+                )
+            )
     
     return results
-

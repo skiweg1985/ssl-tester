@@ -334,6 +334,19 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
             else:
                 lines.append(f"  Status: {_format_severity(Severity.OK)}")
                 lines.append(f"  Vulnerable: 0 of {len(result.vulnerability_checks)}")
+            
+            # Show all vulnerabilities with their status
+            lines.append("  Vulnerability Checks:")
+            for vuln in result.vulnerability_checks:
+                if vuln.vulnerable:
+                    status = "NICHT OK"
+                elif "test skipped" in vuln.description.lower() or "nmap required" in vuln.description.lower():
+                    status = "ÜBERSPRUNGEN (nmap fehlt)"
+                elif "test failed" in vuln.description.lower():
+                    status = "FEHLER"
+                else:
+                    status = "OK"
+                lines.append(f"    {vuln.vulnerability_name}: {status}")
             lines.append("")
         else:
             lines.append("Cryptographic Vulnerabilities: Not checked (--skip-vulnerabilities)")
@@ -935,13 +948,31 @@ def generate_summary(result: CheckResult) -> str:
                 issues.append("Perfect Forward Secrecy (PFS) not supported")
 
     # Cryptographic Vulnerabilities
-    vulnerable_found = [v for v in result.vulnerability_checks if v.vulnerable]
-    if vulnerable_found:
-        for vuln in vulnerable_found:
-            if vuln.severity == Severity.FAIL:
-                issues.append(f"CRITICAL: {vuln.vulnerability_name} ({vuln.cve_id}) - {vuln.description}")
-            elif vuln.severity == Severity.WARN:
-                issues.append(f"WARNING: {vuln.vulnerability_name} ({vuln.cve_id}) - {vuln.description}")
+    # Show all vulnerabilities with their status (OK/NICHT OK)
+    if result.vulnerability_checks:
+        vulnerable_found = [v for v in result.vulnerability_checks if v.vulnerable]
+        if vulnerable_found:
+            for vuln in vulnerable_found:
+                if vuln.severity == Severity.FAIL:
+                    issues.append(f"CRITICAL: {vuln.vulnerability_name} ({vuln.cve_id}) - {vuln.description}")
+                elif vuln.severity == Severity.WARN:
+                    issues.append(f"WARNING: {vuln.vulnerability_name} ({vuln.cve_id}) - {vuln.description}")
+        
+        # Add summary of all vulnerability checks with status
+        vuln_statuses = []
+        for vuln in result.vulnerability_checks:
+            if vuln.vulnerable:
+                status = "NICHT OK"
+            elif "test skipped" in vuln.description.lower() or "nmap required" in vuln.description.lower():
+                status = "ÜBERSPRUNGEN (nmap fehlt)"
+            elif "test failed" in vuln.description.lower():
+                status = "FEHLER"
+            else:
+                status = "OK"
+            vuln_statuses.append(f"{vuln.vulnerability_name}: {status}")
+        
+        # Always show vulnerability check summary
+        issues.append(f"Vulnerability Checks: {'; '.join(vuln_statuses)}")
 
     # Security Best Practices
     if result.security_check:

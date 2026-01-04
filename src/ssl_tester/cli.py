@@ -62,7 +62,8 @@ def perform_ssl_check(
     skip_hostname: bool = False,
     skip_protocol: bool = False,
     skip_cipher: bool = False,
-    skip_vulnerabilities: bool = False,
+    vulnerabilities: bool = False,
+    vulnerability_list: Optional[str] = None,
     skip_security: bool = False,
     ca_bundle: Optional[Path] = None,
     ipv6: bool = False,
@@ -405,11 +406,19 @@ def perform_ssl_check(
         except Exception as e:
             logger.warning(f"Cipher check failed: {e}")
 
-    # Check cryptographic vulnerabilities
+    # Check cryptographic vulnerabilities (only if --vulnerabilities is specified)
     vulnerability_checks: List = []
-    if not skip_vulnerabilities:
+    if vulnerabilities:
+        # Parse vulnerability list if provided, otherwise check all
+        only_vulnerabilities: Optional[List[str]] = None
+        if vulnerability_list:
+            # Parse comma-separated list
+            only_vulnerabilities = [v.strip() for v in vulnerability_list.split(",") if v.strip()]
+        
         try:
-            vulnerability_checks = check_cryptographic_flaws(hostname, port, timeout)
+            vulnerability_checks = check_cryptographic_flaws(
+                hostname, port, timeout, only_vulnerabilities=only_vulnerabilities
+            )
         except Exception as e:
             logger.warning(f"Vulnerability check failed: {e}")
 
@@ -469,7 +478,12 @@ def check(
     debug_warnings: bool = typer.Option(False, "--debug-warnings", help="Show original Python warnings in addition to Findings"),
     skip_protocol: bool = typer.Option(False, "--skip-protocol", help="Skip protocol version checks"),
     skip_cipher: bool = typer.Option(False, "--skip-cipher", help="Skip cipher suite checks"),
-    skip_vulnerabilities: bool = typer.Option(False, "--skip-vulnerabilities", help="Skip cryptographic vulnerability checks"),
+    vulnerabilities: bool = typer.Option(False, "--vulnerabilities", help="Enable vulnerability checks (checks all vulnerabilities)"),
+    vulnerability_list: Optional[str] = typer.Option(
+        None,
+        "--vulnerability-list",
+        help="Specify which vulnerabilities to check (comma-separated). Requires --vulnerabilities. Available: heartbleed, drown, poodle, ccs-injection, freak, logjam, ticketbleed, sweet32",
+    ),
     skip_security: bool = typer.Option(False, "--skip-security", help="Skip security best practices checks"),
     service: Optional[str] = typer.Option(None, "--service", help="Service type (HTTPS, SMTP, IMAP, POP3, FTP, LDAP, XMPP, RDP, PostgreSQL, MySQL). Auto-detected from port if not specified."),
     html: Optional[Path] = typer.Option(None, "--html", help="Generate HTML report and save to file"),
@@ -487,6 +501,11 @@ def check(
     
     # Set color output
     set_color_output(color)
+    
+    # Validate vulnerability options
+    if vulnerability_list and not vulnerabilities:
+        logger.warning("--vulnerability-list requires --vulnerabilities. Ignoring --vulnerability-list.")
+        vulnerability_list = None
     
     # Parse severity filter
     # Handle both string and OptionInfo objects (when called directly vs via CLI)
@@ -546,7 +565,8 @@ def check(
         skip_hostname=skip_hostname,
         skip_protocol=skip_protocol,
         skip_cipher=skip_cipher,
-        skip_vulnerabilities=skip_vulnerabilities,
+        vulnerabilities=vulnerabilities,
+        vulnerability_list=vulnerability_list,
         skip_security=skip_security,
         ca_bundle=ca_bundle,
         ipv6=ipv6,
@@ -602,7 +622,12 @@ def batch(
     skip_hostname: bool = typer.Option(False, "--skip-hostname", help="Skip hostname check"),
     skip_protocol: bool = typer.Option(False, "--skip-protocol", help="Skip protocol checks"),
     skip_cipher: bool = typer.Option(False, "--skip-cipher", help="Skip cipher checks"),
-    skip_vulnerabilities: bool = typer.Option(False, "--skip-vulnerabilities", help="Skip vulnerability checks"),
+    vulnerabilities: bool = typer.Option(False, "--vulnerabilities", help="Enable vulnerability checks (checks all vulnerabilities)"),
+    vulnerability_list: Optional[str] = typer.Option(
+        None,
+        "--vulnerability-list",
+        help="Specify which vulnerabilities to check (comma-separated). Requires --vulnerabilities. Available: heartbleed, drown, poodle, ccs-injection, freak, logjam, ticketbleed, sweet32",
+    ),
     insecure: bool = typer.Option(False, "--insecure", help="Accept self-signed certificates"),
     ca_bundle: Optional[Path] = typer.Option(None, "--ca-bundle", help="Custom CA bundle"),
     proxy: Optional[str] = typer.Option(None, "--proxy", help="Proxy URL"),
@@ -632,7 +657,8 @@ def batch(
                 skip_hostname=skip_hostname,
                 skip_protocol=skip_protocol,
                 skip_cipher=skip_cipher,
-                skip_vulnerabilities=skip_vulnerabilities,
+                vulnerabilities=vulnerabilities,
+                vulnerability_list=vulnerability_list,
                 skip_security=skip_security,
                 ca_bundle=ca_bundle,
                 ipv6=False,  # Batch mode doesn't support IPv6 preference
@@ -712,7 +738,12 @@ def compare(
     skip_hostname: bool = typer.Option(False, "--skip-hostname", help="Skip hostname check"),
     skip_protocol: bool = typer.Option(False, "--skip-protocol", help="Skip protocol checks"),
     skip_cipher: bool = typer.Option(False, "--skip-cipher", help="Skip cipher checks"),
-    skip_vulnerabilities: bool = typer.Option(False, "--skip-vulnerabilities", help="Skip vulnerability checks"),
+    vulnerabilities: bool = typer.Option(False, "--vulnerabilities", help="Enable vulnerability checks (checks all vulnerabilities)"),
+    vulnerability_list: Optional[str] = typer.Option(
+        None,
+        "--vulnerability-list",
+        help="Specify which vulnerabilities to check (comma-separated). Requires --vulnerabilities. Available: heartbleed, drown, poodle, ccs-injection, freak, logjam, ticketbleed, sweet32",
+    ),
     skip_security: bool = typer.Option(False, "--skip-security", help="Skip security checks"),
     html: Optional[Path] = typer.Option(None, "--html", help="Generate comparison HTML report"),
 ):
@@ -752,7 +783,8 @@ def compare(
         skip_hostname=skip_hostname,
         skip_protocol=skip_protocol,
         skip_cipher=skip_cipher,
-        skip_vulnerabilities=skip_vulnerabilities,
+        vulnerabilities=vulnerabilities,
+        vulnerability_list=vulnerability_list,
         skip_security=skip_security,
         ca_bundle=None,
         ipv6=False,
@@ -771,7 +803,8 @@ def compare(
         skip_hostname=skip_hostname,
         skip_protocol=skip_protocol,
         skip_cipher=skip_cipher,
-        skip_vulnerabilities=skip_vulnerabilities,
+        vulnerabilities=vulnerabilities,
+        vulnerability_list=vulnerability_list,
         skip_security=skip_security,
         ca_bundle=None,
         ipv6=False,

@@ -24,7 +24,7 @@ When running your own Certificate Authority (CA) or managing internal certificat
 - **Multi-Service Support**: Check certificates not just on HTTPS, but also on SMTP, IMAP, LDAP, and other TLS-enabled services
 
 **Security Auditing:**
-- Comprehensive vulnerability scanning (Heartbleed, POODLE, BEAST, etc.)
+- Optional comprehensive vulnerability scanning (Heartbleed, POODLE, DROWN, etc.) using nmap
 - Protocol and cipher suite analysis
 - Security best practices validation (HSTS, OCSP Stapling, etc.)
 - Detailed security rating system (A++ to F) with specific downgrade reasons
@@ -55,6 +55,16 @@ Whether you're managing a corporate PKI, auditing SSL/TLS configurations, or tro
   - Check: `pip3 --version`
 
 ### Optional (but recommended)
+
+- **nmap** (for comprehensive vulnerability scanning)
+  - **Highly recommended** for accurate vulnerability detection
+  - The tool will attempt to automatically install nmap if not found (requires package manager)
+  - Manual installation:
+    - macOS: `brew install nmap`
+    - Linux: `sudo apt-get install nmap` (Debian/Ubuntu) or `sudo yum install nmap` (RHEL/CentOS)
+    - Windows: Download from [nmap.org](https://nmap.org/download.html)
+  - Check: `nmap --version`
+  - **Note:** Vulnerability checks are disabled by default. Use `--vulnerabilities` to enable them. Without nmap, tests are skipped.
 
 - **OpenSSL** (for fallback certificate chain extraction)
   - macOS: Usually pre-installed
@@ -209,16 +219,26 @@ The tool automatically checks:
 - **Weak Ciphers**: Detection of RC4, MD5, DES, 3DES, Export ciphers
 
 ### Cryptographic Vulnerabilities
-- **Heartbleed** (CVE-2014-0160)
-- **POODLE** (CVE-2014-3566)
-- **BEAST** (CVE-2011-3389)
-- **FREAK** (CVE-2015-0204)
-- **Logjam** (CVE-2015-4000)
-- **DROWN** (CVE-2016-0800)
-- **Sweet32** (CVE-2016-2183)
-- **Lucky13** (CVE-2013-0169)
-- **ROBOT** (CVE-2017-13099)
-- **Ticketbleed** (CVE-2016-9244)
+
+**By default, vulnerability checks are NOT performed.** Use `--vulnerabilities` to enable them.
+
+The tool checks for known SSL/TLS vulnerabilities using nmap. **All vulnerability tests require nmap to be installed.** Tests are skipped if nmap is not available.
+
+Available vulnerability checks:
+- **Heartbleed** (CVE-2014-0160) - Uses nmap `ssl-heartbleed` script
+- **DROWN** (CVE-2016-0800) - Uses nmap `ssl-drown` script
+- **POODLE** (CVE-2014-3566) - Uses nmap `ssl-poodle` script
+- **CCS Injection** (CVE-2014-0224) - Uses nmap `ssl-ccs-injection` script
+- **FREAK** (CVE-2015-0204) - Uses nmap `ssl-freak` script
+- **Logjam** (CVE-2015-4000) - Uses nmap `ssl-dh-params` script
+- **Ticketbleed** (CVE-2016-9244) - Uses nmap `ssl-ticketbleed` script
+- **Sweet32** (CVE-2016-2183) - Uses nmap `ssl-enum-ciphers` script
+
+**Usage:**
+- `--vulnerabilities` - Enable all vulnerability checks
+- `--vulnerabilities --vulnerability-list heartbleed,drown` - Check only specific vulnerabilities
+
+**Important:** Vulnerability tests are only performed when nmap is installed. Without nmap, tests are skipped and results indicate that nmap is required.
 
 ### Security Best Practices
 - **HSTS**: HTTP Strict Transport Security header check
@@ -417,8 +437,11 @@ ssl-tester example.com --ipv6
 # Skip certain checks
 ssl-tester example.com --skip-protocol --skip-cipher
 
-# Only perform certain checks
-ssl-tester example.com --skip-vulnerabilities --skip-security
+# Enable vulnerability checks (all vulnerabilities)
+ssl-tester example.com --vulnerabilities
+
+# Enable only specific vulnerability checks
+ssl-tester example.com --vulnerabilities --vulnerability-list heartbleed,drown
 ```
 
 ### Output Options

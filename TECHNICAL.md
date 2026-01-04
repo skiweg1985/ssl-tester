@@ -71,18 +71,54 @@ This documentation contains detailed technical information for developers and ad
 
 ### Cryptographic Vulnerabilities
 
-The tool checks for known SSL/TLS vulnerabilities:
+**By default, vulnerability checks are NOT performed.** Use `--vulnerabilities` to enable them.
 
-- **Heartbleed** (CVE-2014-0160): OpenSSL Heartbeat Extension
-- **POODLE** (CVE-2014-3566): SSL 3.0 Fallback
-- **BEAST** (CVE-2011-3389): TLS 1.0 CBC Vulnerability
-- **FREAK** (CVE-2015-0204): Export Cipher Suites
-- **Logjam** (CVE-2015-4000): Weak DH Parameters
-- **DROWN** (CVE-2016-0800): SSLv2 Support
-- **Sweet32** (CVE-2016-2183): 64-bit Block Ciphers (3DES)
-- **Lucky13** (CVE-2013-0169): CBC Mode Timing Attack
-- **ROBOT** (CVE-2017-13099): RSA PKCS#1 v1.5 Padding Oracle
-- **Ticketbleed** (CVE-2016-9244): Session Ticket Handling
+The tool checks for known SSL/TLS vulnerabilities using nmap. All vulnerability tests require nmap to be installed.
+
+**Nmap Integration:**
+- The tool automatically detects if nmap is installed in the system PATH
+- If nmap is not found, it attempts to install it via package managers (Homebrew on macOS, apt/yum/dnf/pacman on Linux)
+- If automatic installation fails, tests are skipped with a warning message
+- Nmap scripts used:
+  - `ssl-heartbleed` - Heartbleed vulnerability detection
+  - `ssl-poodle` - POODLE vulnerability detection
+  - `ssl-drown` - DROWN vulnerability detection
+  - `ssl-ccs-injection` - CCS Injection vulnerability detection
+  - `ssl-freak` - FREAK vulnerability detection
+  - `ssl-dh-params` - Logjam vulnerability detection (weak DH parameters)
+  - `ssl-enum-ciphers` - Sweet32 detection (cipher enumeration)
+  - `ssl-ticketbleed` - Ticketbleed vulnerability detection
+
+**Vulnerability Checks:**
+
+All vulnerability tests require nmap to be installed. Tests are skipped if nmap is not available.
+
+**CLI Options:**
+- `--vulnerabilities` - Enable vulnerability checks (checks all vulnerabilities by default)
+- `--vulnerability-list <list>` - Specify which vulnerabilities to check (comma-separated). Requires `--vulnerabilities`.
+  - Available: `heartbleed`, `drown`, `poodle`, `ccs-injection`, `freak`, `logjam`, `ticketbleed`, `sweet32`
+  - Example: `--vulnerabilities --vulnerability-list heartbleed,drown`
+
+- **Heartbleed** (CVE-2014-0160): Uses nmap `ssl-heartbleed` script for real heartbeat request testing.
+- **DROWN** (CVE-2016-0800): Uses nmap `ssl-drown` script.
+- **POODLE** (CVE-2014-3566): Uses nmap `ssl-poodle` script.
+- **CCS Injection** (CVE-2014-0224): Uses nmap `ssl-ccs-injection` script.
+- **FREAK** (CVE-2015-0204): Uses nmap `ssl-freak` script.
+- **Logjam** (CVE-2015-4000): Uses nmap `ssl-dh-params` script to check DH parameter strength.
+- **Ticketbleed** (CVE-2016-9244): Uses nmap `ssl-ticketbleed` script.
+- **Sweet32** (CVE-2016-2183): Uses nmap `ssl-enum-ciphers` to check for 3DES/DES/Blowfish.
+
+**Removed Tests:**
+The following vulnerability tests have been removed as they only perform simplified checks that don't accurately detect vulnerabilities:
+- **BEAST** (CVE-2011-3389): Would require checking all offered ciphers, not just the negotiated one.
+- **Lucky13** (CVE-2013-0169): Requires timing attack tests with specialized tools.
+- **ROBOT** (CVE-2017-13099): Requires padding oracle attack tests with specialized tools.
+
+**Behavior when nmap is not available:**
+- Tests are skipped and return a result indicating that nmap is required
+- Results include a recommendation to install nmap
+- Users are warned in logs when nmap is not available
+- No false security is provided - tests are clearly marked as skipped
 
 ### Security Best Practices
 
