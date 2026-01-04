@@ -437,12 +437,33 @@ ssl-tester example.com --ipv6
 # Skip certain checks
 ssl-tester example.com --skip-protocol --skip-cipher
 
+# Run only specific checks (exclusive mode)
+ssl-tester example.com --only-checks chain,hostname
+ssl-tester example.com --only-checks crl,ocsp
+ssl-tester example.com --only-checks protocol,cipher
+ssl-tester example.com --only-checks chain,hostname,protocol
+
 # Enable vulnerability checks (all vulnerabilities)
 ssl-tester example.com --vulnerabilities
 
 # Enable only specific vulnerability checks
 ssl-tester example.com --vulnerabilities --vulnerability-list heartbleed,drown
+
+# Combine: Run only specific checks including vulnerabilities
+ssl-tester example.com --only-checks chain,vulnerabilities --vulnerability-list heartbleed
 ```
+
+**Available checks for `--only-checks`:**
+- `chain` - Chain and Trust Store Validation
+- `hostname` - Hostname Matching Check
+- `crl` - CRL Reachability and Validation Checks (requires `chain`)
+- `ocsp` - OCSP Reachability Checks (requires `chain`)
+- `protocol` - Protocol Version Checks
+- `cipher` - Cipher Suite Checks
+- `vulnerabilities` - Cryptographic Vulnerability Checks (requires nmap)
+- `security` - Security Best Practices Checks (HSTS, OCSP Stapling, etc.)
+
+**Note:** When using `--only-checks`, only the specified checks are performed. All other checks are skipped. If `crl` or `ocsp` is specified without `chain`, `chain` is automatically added since CRL/OCSP checks require certificate information.
 
 ### Output Options
 

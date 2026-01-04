@@ -70,9 +70,13 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
         lines.append("Note: Certificate checks could not be performed due to connection failure.")
         lines.append("")
     else:
+        # Determine which sections to show based on only_checks
+        only_checks_set = set(result.only_checks) if result.only_checks else None
+        
         # Full report when certificate could be retrieved
-        # Chain Check
-        lines.append("Certificate Chain:")
+        # Chain Check (always shown if not skipped, or if in only_checks)
+        if only_checks_set is None or "chain" in only_checks_set:
+            lines.append("Certificate Chain:")
         if result.chain_check.skipped:
             lines.append(f"  Status: SKIPPED (--skip-chain)")
         else:
@@ -99,8 +103,9 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
             lines.append(f"  Error: {error_msg}")
         lines.append("")
 
-        # Hostname Check
-        lines.append("Hostname Matching:")
+        # Hostname Check (only if in only_checks or not using only_checks)
+        if only_checks_set is None or "hostname" in only_checks_set:
+            lines.append("Hostname Matching:")
         if result.hostname_check.skipped:
             lines.append(f"  Status: SKIPPED (--skip-hostname)")
         else:
@@ -116,8 +121,9 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
             lines.append(f"  Matched CN: {result.hostname_check.matched_cn} (deprecated)")
         lines.append("")
 
-        # Validity Check
-        lines.append("Certificate Validity:")
+        # Validity Check (always shown if chain is shown, as it's part of chain validation)
+        if only_checks_set is None or "chain" in only_checks_set:
+            lines.append("Certificate Validity:")
         lines.append(f"  Status: {_format_severity(result.validity_check.severity)}")
         lines.append(f"  Valid: {result.validity_check.is_valid}")
         lines.append(f"  Not Before: {result.validity_check.not_before.strftime('%Y-%m-%d %H:%M:%S UTC')}")
@@ -127,50 +133,21 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
             lines.append("  ⚠️  CERTIFICATE EXPIRED")
         lines.append("")
 
-        # CRL Checks
-        lines.append("CRL Distribution Points:")
-        
-        # Group CRL checks by certificate type and show for each certificate
-        leaf_crl_checks = [c for c in result.crl_checks if c.certificate_type == "Leaf"]
-        intermediate_crl_checks = [c for c in result.crl_checks if c.certificate_type == "Intermediate"]
-        root_crl_checks = [c for c in result.crl_checks if c.certificate_type == "Root"]
-        unknown_crl_checks = [c for c in result.crl_checks if not c.certificate_type]
-        
-        # Leaf certificate
-        if result.chain_check.leaf_cert:
-            lines.append("  Leaf Certificate:")
-            if leaf_crl_checks:
-                for crl_check in leaf_crl_checks:
-                    lines.append(f"    URL: {crl_check.url}")
-                    lines.append(f"      Status: {_format_severity(crl_check.severity)}")
-                    lines.append(f"      Reachable: {crl_check.reachable}")
-                    if crl_check.status_code:
-                        lines.append(f"      HTTP Status: {crl_check.status_code}")
-                    if crl_check.content_type:
-                        lines.append(f"      Content-Type: {crl_check.content_type}")
-                    if crl_check.size_bytes:
-                        # Format size nicely
-                        if crl_check.size_bytes < 1024:
-                            size_str = f"{crl_check.size_bytes} bytes"
-                        elif crl_check.size_bytes < 1024 * 1024:
-                            size_str = f"{crl_check.size_bytes / 1024:.2f} KB"
-                        else:
-                            size_str = f"{crl_check.size_bytes / (1024 * 1024):.2f} MB"
-                        lines.append(f"      Size: {size_str} ({crl_check.size_bytes} bytes)")
-                    if crl_check.redirect_chain and len(crl_check.redirect_chain) > 1:
-                        lines.append(f"      Redirects ({len(crl_check.redirect_chain)}): {' -> '.join(crl_check.redirect_chain)}")
-                    if crl_check.error:
-                        lines.append(f"      Error: {crl_check.error}")
-            else:
-                lines.append("    No CRL Distribution Points found")
-        
-        # Intermediate certificates
-        if result.chain_check.intermediate_certs:
-            for idx, intermediate in enumerate(result.chain_check.intermediate_certs, 1):
-                lines.append(f"  Intermediate Certificate {idx}:")
-                intermediate_crls = [c for c in intermediate_crl_checks if c.certificate_subject == intermediate.subject]
-                if intermediate_crls:
-                    for crl_check in intermediate_crls:
+        # CRL Checks (only if in only_checks or not using only_checks)
+        if only_checks_set is None or "crl" in only_checks_set:
+            lines.append("CRL Distribution Points:")
+            
+            # Group CRL checks by certificate type and show for each certificate
+            leaf_crl_checks = [c for c in result.crl_checks if c.certificate_type == "Leaf"]
+            intermediate_crl_checks = [c for c in result.crl_checks if c.certificate_type == "Intermediate"]
+            root_crl_checks = [c for c in result.crl_checks if c.certificate_type == "Root"]
+            unknown_crl_checks = [c for c in result.crl_checks if not c.certificate_type]
+            
+            # Leaf certificate
+            if result.chain_check.leaf_cert:
+                lines.append("  Leaf Certificate:")
+                if leaf_crl_checks:
+                    for crl_check in leaf_crl_checks:
                         lines.append(f"    URL: {crl_check.url}")
                         lines.append(f"      Status: {_format_severity(crl_check.severity)}")
                         lines.append(f"      Reachable: {crl_check.reachable}")
@@ -193,80 +170,111 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
                             lines.append(f"      Error: {crl_check.error}")
                 else:
                     lines.append("    No CRL Distribution Points found")
-        
-        # Root certificate (only show if CRL URLs are present)
-        if result.chain_check.root_cert and root_crl_checks:
-            lines.append("  Root Certificate:")
-            for crl_check in root_crl_checks:
-                lines.append(f"    URL: {crl_check.url}")
-                lines.append(f"      Status: {_format_severity(crl_check.severity)}")
-                lines.append(f"      Reachable: {crl_check.reachable}")
-                if crl_check.status_code:
-                    lines.append(f"      HTTP Status: {crl_check.status_code}")
-                if crl_check.content_type:
-                    lines.append(f"      Content-Type: {crl_check.content_type}")
-                if crl_check.size_bytes:
-                    # Format size nicely
-                    if crl_check.size_bytes < 1024:
-                        size_str = f"{crl_check.size_bytes} bytes"
-                    elif crl_check.size_bytes < 1024 * 1024:
-                        size_str = f"{crl_check.size_bytes / 1024:.2f} KB"
+            
+            # Intermediate certificates
+            if result.chain_check.intermediate_certs:
+                for idx, intermediate in enumerate(result.chain_check.intermediate_certs, 1):
+                    lines.append(f"  Intermediate Certificate {idx}:")
+                    intermediate_crls = [c for c in intermediate_crl_checks if c.certificate_subject == intermediate.subject]
+                    if intermediate_crls:
+                        for crl_check in intermediate_crls:
+                            lines.append(f"    URL: {crl_check.url}")
+                            lines.append(f"      Status: {_format_severity(crl_check.severity)}")
+                            lines.append(f"      Reachable: {crl_check.reachable}")
+                            if crl_check.status_code:
+                                lines.append(f"      HTTP Status: {crl_check.status_code}")
+                            if crl_check.content_type:
+                                lines.append(f"      Content-Type: {crl_check.content_type}")
+                            if crl_check.size_bytes:
+                                # Format size nicely
+                                if crl_check.size_bytes < 1024:
+                                    size_str = f"{crl_check.size_bytes} bytes"
+                                elif crl_check.size_bytes < 1024 * 1024:
+                                    size_str = f"{crl_check.size_bytes / 1024:.2f} KB"
+                                else:
+                                    size_str = f"{crl_check.size_bytes / (1024 * 1024):.2f} MB"
+                                lines.append(f"      Size: {size_str} ({crl_check.size_bytes} bytes)")
+                            if crl_check.redirect_chain and len(crl_check.redirect_chain) > 1:
+                                lines.append(f"      Redirects ({len(crl_check.redirect_chain)}): {' -> '.join(crl_check.redirect_chain)}")
+                            if crl_check.error:
+                                lines.append(f"      Error: {crl_check.error}")
                     else:
-                        size_str = f"{crl_check.size_bytes / (1024 * 1024):.2f} MB"
-                    lines.append(f"      Size: {size_str} ({crl_check.size_bytes} bytes)")
-                if crl_check.redirect_chain and len(crl_check.redirect_chain) > 1:
-                    lines.append(f"      Redirects ({len(crl_check.redirect_chain)}): {' -> '.join(crl_check.redirect_chain)}")
-                if crl_check.error:
-                    lines.append(f"      Error: {crl_check.error}")
-        
-        # Unknown certificates (fallback for backwards compatibility)
-        if unknown_crl_checks:
-            for crl_check in unknown_crl_checks:
-                lines.append(f"  URL: {crl_check.url}")
-                lines.append(f"    Status: {_format_severity(crl_check.severity)}")
-                lines.append(f"    Reachable: {crl_check.reachable}")
-                if crl_check.status_code:
-                    lines.append(f"    HTTP Status: {crl_check.status_code}")
-                if crl_check.content_type:
-                    lines.append(f"    Content-Type: {crl_check.content_type}")
-                if crl_check.size_bytes:
-                    # Format size nicely
-                    if crl_check.size_bytes < 1024:
-                        size_str = f"{crl_check.size_bytes} bytes"
-                    elif crl_check.size_bytes < 1024 * 1024:
-                        size_str = f"{crl_check.size_bytes / 1024:.2f} KB"
-                    else:
-                        size_str = f"{crl_check.size_bytes / (1024 * 1024):.2f} MB"
-                    lines.append(f"    Size: {size_str} ({crl_check.size_bytes} bytes)")
-                if crl_check.redirect_chain and len(crl_check.redirect_chain) > 1:
-                    lines.append(f"    Redirects ({len(crl_check.redirect_chain)}): {' -> '.join(crl_check.redirect_chain)}")
-                if crl_check.error:
-                    lines.append(f"    Error: {crl_check.error}")
-        
-        # If no CRL checks at all
-        if not result.crl_checks:
-            lines.append("  No CRL Distribution Points found in any certificate")
-        
-        lines.append("")
-
-        # OCSP Checks
-        if result.ocsp_checks:
-            lines.append("OCSP Responders:")
-            for ocsp_check in result.ocsp_checks:
-                lines.append(f"  URL: {ocsp_check.url}")
-                lines.append(f"    Status: {_format_severity(ocsp_check.severity)}")
-                lines.append(f"    Reachable: {ocsp_check.reachable}")
-                if ocsp_check.status_code:
-                    lines.append(f"    HTTP Status: {ocsp_check.status_code}")
-                if ocsp_check.error:
-                    lines.append(f"    Error: {ocsp_check.error}")
+                        lines.append("    No CRL Distribution Points found")
+            
+            # Root certificate (only show if CRL URLs are present)
+            if result.chain_check.root_cert and root_crl_checks:
+                lines.append("  Root Certificate:")
+                for crl_check in root_crl_checks:
+                    lines.append(f"    URL: {crl_check.url}")
+                    lines.append(f"      Status: {_format_severity(crl_check.severity)}")
+                    lines.append(f"      Reachable: {crl_check.reachable}")
+                    if crl_check.status_code:
+                        lines.append(f"      HTTP Status: {crl_check.status_code}")
+                    if crl_check.content_type:
+                        lines.append(f"      Content-Type: {crl_check.content_type}")
+                    if crl_check.size_bytes:
+                        # Format size nicely
+                        if crl_check.size_bytes < 1024:
+                            size_str = f"{crl_check.size_bytes} bytes"
+                        elif crl_check.size_bytes < 1024 * 1024:
+                            size_str = f"{crl_check.size_bytes / 1024:.2f} KB"
+                        else:
+                            size_str = f"{crl_check.size_bytes / (1024 * 1024):.2f} MB"
+                        lines.append(f"      Size: {size_str} ({crl_check.size_bytes} bytes)")
+                    if crl_check.redirect_chain and len(crl_check.redirect_chain) > 1:
+                        lines.append(f"      Redirects ({len(crl_check.redirect_chain)}): {' -> '.join(crl_check.redirect_chain)}")
+                    if crl_check.error:
+                        lines.append(f"      Error: {crl_check.error}")
+            
+            # Unknown certificates (fallback for backwards compatibility)
+            if unknown_crl_checks:
+                for crl_check in unknown_crl_checks:
+                    lines.append(f"  URL: {crl_check.url}")
+                    lines.append(f"    Status: {_format_severity(crl_check.severity)}")
+                    lines.append(f"    Reachable: {crl_check.reachable}")
+                    if crl_check.status_code:
+                        lines.append(f"    HTTP Status: {crl_check.status_code}")
+                    if crl_check.content_type:
+                        lines.append(f"    Content-Type: {crl_check.content_type}")
+                    if crl_check.size_bytes:
+                        # Format size nicely
+                        if crl_check.size_bytes < 1024:
+                            size_str = f"{crl_check.size_bytes} bytes"
+                        elif crl_check.size_bytes < 1024 * 1024:
+                            size_str = f"{crl_check.size_bytes / 1024:.2f} KB"
+                        else:
+                            size_str = f"{crl_check.size_bytes / (1024 * 1024):.2f} MB"
+                        lines.append(f"    Size: {size_str} ({crl_check.size_bytes} bytes)")
+                    if crl_check.redirect_chain and len(crl_check.redirect_chain) > 1:
+                        lines.append(f"    Redirects ({len(crl_check.redirect_chain)}): {' -> '.join(crl_check.redirect_chain)}")
+                    if crl_check.error:
+                        lines.append(f"    Error: {crl_check.error}")
+            
+            # If no CRL checks at all
+            if not result.crl_checks:
+                lines.append("  No CRL Distribution Points found in any certificate")
+            
             lines.append("")
-        else:
-            lines.append("OCSP Responders: None found")
-            lines.append("")
 
-        # Certificate Findings
-        if result.certificate_findings:
+        # OCSP Checks (only if in only_checks or not using only_checks)
+        if only_checks_set is None or "ocsp" in only_checks_set:
+            if result.ocsp_checks:
+                lines.append("OCSP Responders:")
+                for ocsp_check in result.ocsp_checks:
+                    lines.append(f"  URL: {ocsp_check.url}")
+                    lines.append(f"    Status: {_format_severity(ocsp_check.severity)}")
+                    lines.append(f"    Reachable: {ocsp_check.reachable}")
+                    if ocsp_check.status_code:
+                        lines.append(f"    HTTP Status: {ocsp_check.status_code}")
+                    if ocsp_check.error:
+                        lines.append(f"    Error: {ocsp_check.error}")
+                lines.append("")
+            else:
+                lines.append("OCSP Responders: None found")
+                lines.append("")
+
+        # Certificate Findings (always shown if chain is shown, as they come from chain validation)
+        if (only_checks_set is None or "chain" in only_checks_set) and result.certificate_findings:
             lines.append("Certificate Findings:")
             for finding in result.certificate_findings:
                 lines.append(f"  Code: {finding.code}")
@@ -280,102 +288,114 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
                 if finding.fingerprint_sha256:
                     lines.append(f"    Fingerprint (SHA256): {finding.fingerprint_sha256}")
             lines.append("")
-        else:
+        elif only_checks_set is None or "chain" in only_checks_set:
             lines.append("Certificate Findings: None")
             lines.append("")
 
-        # Protocol Version Check
-        if result.protocol_check:
-            lines.append("Protocol Versions:")
-            lines.append(f"  Status: {_format_severity(result.protocol_check.severity)}")
-            lines.append(f"  Supported Versions: {', '.join(result.protocol_check.supported_versions) if result.protocol_check.supported_versions else 'None'}")
-            lines.append(f"  Best Version: {result.protocol_check.best_version if result.protocol_check.best_version else 'None'}")
-            if result.protocol_check.deprecated_versions:
-                lines.append(f"  Deprecated Versions: {', '.join(result.protocol_check.deprecated_versions)} ⚠")
-            if result.protocol_check.ssl_versions:
-                lines.append(f"  SSL Versions (CRITICAL): {', '.join(result.protocol_check.ssl_versions)} ✗")
-            lines.append("")
-        else:
-            lines.append("Protocol Versions: Not checked (--skip-protocol)")
-            lines.append("")
-
-        # Cipher Suite Check
-        if result.cipher_check:
-            lines.append("Cipher Suites:")
-            lines.append(f"  Status: {_format_severity(result.cipher_check.severity)}")
-            lines.append(f"  Supported Ciphers: {len(result.cipher_check.supported_ciphers)}")
-            if result.cipher_check.supported_ciphers:
-                # Show first 5 ciphers, then "... and X more" if there are more
-                display_ciphers = result.cipher_check.supported_ciphers[:5]
-                for cipher in display_ciphers:
-                    lines.append(f"    - {cipher}")
-                if len(result.cipher_check.supported_ciphers) > 5:
-                    lines.append(f"    ... and {len(result.cipher_check.supported_ciphers) - 5} more")
-            if result.cipher_check.weak_ciphers:
-                lines.append(f"  Weak Ciphers: {', '.join(result.cipher_check.weak_ciphers)} ⚠")
-            lines.append(f"  Perfect Forward Secrecy (PFS): {'Yes ✓' if result.cipher_check.pfs_supported else 'No ⚠'}")
-            lines.append(f"  Server Preferences: {'Yes' if result.cipher_check.server_preferences else 'No'}")
-            lines.append("")
-        else:
-            lines.append("Cipher Suites: Not checked (--skip-cipher)")
-            lines.append("")
-
-        # Cryptographic Vulnerabilities
-        if result.vulnerability_checks:
-            lines.append("Cryptographic Vulnerabilities:")
-            vulnerable_found = [v for v in result.vulnerability_checks if v.vulnerable]
-            if vulnerable_found:
-                lines.append(f"  Status: {_format_severity(Severity.FAIL if any(v.severity == Severity.FAIL for v in vulnerable_found) else Severity.WARN)}")
-                lines.append(f"  Vulnerable: {len(vulnerable_found)} of {len(result.vulnerability_checks)}")
-                for vuln in vulnerable_found:
-                    lines.append(f"    {vuln.vulnerability_name} ({vuln.cve_id}): {_format_severity(vuln.severity)}")
-                    if vuln.recommendation:
-                        lines.append(f"      Recommendation: {vuln.recommendation}")
+        # Protocol Version Check (only if in only_checks or not using only_checks)
+        if only_checks_set is None or "protocol" in only_checks_set:
+            if result.protocol_check:
+                lines.append("Protocol Versions:")
+                lines.append(f"  Status: {_format_severity(result.protocol_check.severity)}")
+                lines.append(f"  Supported Versions: {', '.join(result.protocol_check.supported_versions) if result.protocol_check.supported_versions else 'None'}")
+                lines.append(f"  Best Version: {result.protocol_check.best_version if result.protocol_check.best_version else 'None'}")
+                if result.protocol_check.deprecated_versions:
+                    lines.append(f"  Deprecated Versions: {', '.join(result.protocol_check.deprecated_versions)} ⚠")
+                if result.protocol_check.ssl_versions:
+                    lines.append(f"  SSL Versions (CRITICAL): {', '.join(result.protocol_check.ssl_versions)} ✗")
+                lines.append("")
             else:
-                lines.append(f"  Status: {_format_severity(Severity.OK)}")
-                lines.append(f"  Vulnerable: 0 of {len(result.vulnerability_checks)}")
-            
-            # Show all vulnerabilities with their status
-            lines.append("  Vulnerability Checks:")
-            for vuln in result.vulnerability_checks:
-                if vuln.vulnerable:
-                    status = "NICHT OK"
-                elif "test skipped" in vuln.description.lower() or "nmap required" in vuln.description.lower():
-                    status = "ÜBERSPRUNGEN (nmap fehlt)"
-                elif "test failed" in vuln.description.lower():
-                    status = "FEHLER"
+                lines.append("Protocol Versions: Not checked (--skip-protocol)")
+                lines.append("")
+
+        # Cipher Suite Check (only if in only_checks or not using only_checks)
+        if only_checks_set is None or "cipher" in only_checks_set:
+            if result.cipher_check:
+                lines.append("Cipher Suites:")
+                lines.append(f"  Status: {_format_severity(result.cipher_check.severity)}")
+                lines.append(f"  Supported Ciphers: {len(result.cipher_check.supported_ciphers)}")
+                if result.cipher_check.supported_ciphers:
+                    # Show first 5 ciphers, then "... and X more" if there are more
+                    display_ciphers = result.cipher_check.supported_ciphers[:5]
+                    for cipher in display_ciphers:
+                        lines.append(f"    - {cipher}")
+                    if len(result.cipher_check.supported_ciphers) > 5:
+                        lines.append(f"    ... and {len(result.cipher_check.supported_ciphers) - 5} more")
+                if result.cipher_check.weak_ciphers:
+                    lines.append(f"  Weak Ciphers: {', '.join(result.cipher_check.weak_ciphers)} ⚠")
+                lines.append(f"  Perfect Forward Secrecy (PFS): {'Yes ✓' if result.cipher_check.pfs_supported else 'No ⚠'}")
+                lines.append(f"  Server Preferences: {'Yes' if result.cipher_check.server_preferences else 'No'}")
+                lines.append("")
+            else:
+                lines.append("Cipher Suites: Not checked (--skip-cipher)")
+                lines.append("")
+
+        # Cryptographic Vulnerabilities (only if in only_checks or not using only_checks)
+        if only_checks_set is None or "vulnerabilities" in only_checks_set:
+            if result.vulnerability_checks:
+                lines.append("Cryptographic Vulnerabilities:")
+                vulnerable_found = [v for v in result.vulnerability_checks if v.vulnerable]
+                if vulnerable_found:
+                    lines.append(f"  Status: {_format_severity(Severity.FAIL if any(v.severity == Severity.FAIL for v in vulnerable_found) else Severity.WARN)}")
+                    lines.append(f"  Vulnerable: {len(vulnerable_found)} of {len(result.vulnerability_checks)}")
+                    for vuln in vulnerable_found:
+                        lines.append(f"    {vuln.vulnerability_name} ({vuln.cve_id}): {_format_severity(vuln.severity)}")
+                        if vuln.recommendation:
+                            lines.append(f"      Recommendation: {vuln.recommendation}")
                 else:
-                    status = "OK"
-                lines.append(f"    {vuln.vulnerability_name}: {status}")
-            lines.append("")
-        else:
-            lines.append("Cryptographic Vulnerabilities: Not checked (--skip-vulnerabilities)")
-            lines.append("")
+                    lines.append(f"  Status: {_format_severity(Severity.OK)}")
+                    lines.append(f"  Vulnerable: 0 of {len(result.vulnerability_checks)}")
+                
+                # Show all vulnerabilities with their status
+                lines.append("  Vulnerability Checks:")
+                for vuln in result.vulnerability_checks:
+                    if vuln.vulnerable:
+                        status = "NICHT OK"
+                    elif "test skipped" in vuln.description.lower() or "nmap required" in vuln.description.lower():
+                        status = "ÜBERSPRUNGEN (nmap fehlt)"
+                    elif "test failed" in vuln.description.lower():
+                        status = "FEHLER"
+                    else:
+                        status = "OK"
+                    lines.append(f"    {vuln.vulnerability_name}: {status}")
+                lines.append("")
+            else:
+                lines.append("Cryptographic Vulnerabilities: Not checked (--skip-vulnerabilities)")
+                lines.append("")
 
-        # Security Best Practices
-        if result.security_check:
-            lines.append("Security Best Practices:")
-            lines.append(f"  Status: {_format_severity(result.security_check.severity)}")
-            lines.append(f"  HSTS Enabled: {'Yes ✓' if result.security_check.hsts_enabled else 'No ⚠'}")
-            if result.security_check.hsts_max_age:
-                lines.append(f"  HSTS Max-Age: {result.security_check.hsts_max_age} seconds")
-            lines.append(f"  OCSP Stapling: {'Yes ✓' if result.security_check.ocsp_stapling_enabled else 'No ⚠'}")
-            lines.append(f"  TLS Compression: {'Enabled ✗ (CRIME vulnerability)' if result.security_check.tls_compression_enabled else 'Disabled ✓'}")
-            lines.append(f"  Session Resumption: {'Yes ✓' if result.security_check.session_resumption_enabled else 'No'}")
-            lines.append("")
-        else:
-            lines.append("Security Best Practices: Not checked (--skip-security)")
-            lines.append("")
+        # Security Best Practices (only if in only_checks or not using only_checks)
+        if only_checks_set is None or "security" in only_checks_set:
+            if result.security_check:
+                lines.append("Security Best Practices:")
+                lines.append(f"  Status: {_format_severity(result.security_check.severity)}")
+                lines.append(f"  HSTS Enabled: {'Yes ✓' if result.security_check.hsts_enabled else 'No ⚠'}")
+                if result.security_check.hsts_max_age:
+                    lines.append(f"  HSTS Max-Age: {result.security_check.hsts_max_age} seconds")
+                lines.append(f"  OCSP Stapling: {'Yes ✓' if result.security_check.ocsp_stapling_enabled else 'No ⚠'}")
+                lines.append(f"  TLS Compression: {'Enabled ✗ (CRIME vulnerability)' if result.security_check.tls_compression_enabled else 'Disabled ✓'}")
+                lines.append(f"  Session Resumption: {'Yes ✓' if result.security_check.session_resumption_enabled else 'No'}")
+                lines.append("")
+            else:
+                lines.append("Security Best Practices: Not checked (--skip-security)")
+                lines.append("")
 
-    # Summary
+    # Summary (only show if all checks were performed, not for partial checks)
     lines.append("=" * 70)
     lines.append("Summary:")
-    if result.rating:
-        lines.append(f"  Security Rating: {result.rating.value}")
-        if result.rating_reasons:
-            lines.append("  Downgrade Reasons:")
-            for reason in result.rating_reasons:
-                lines.append(f"    - {reason}")
+    if result.only_checks:
+        # Partial check - no rating, just show what was checked
+        lines.append(f"  Partial Check: Only {', '.join(sorted(set(result.only_checks)))} checks performed")
+        lines.append(f"  Overall Status: {_format_severity(result.overall_severity)}")
+        if result.summary:
+            lines.append(f"  {result.summary}")
+    else:
+        # Full check - show rating and summary
+        if result.rating:
+            lines.append(f"  Security Rating: {result.rating.value}")
+            if result.rating_reasons:
+                lines.append("  Downgrade Reasons:")
+                for reason in result.rating_reasons:
+                    lines.append(f"    - {reason}")
     
     # Notes on Security Best Practices (only if not according to recommendations)
     hints = []

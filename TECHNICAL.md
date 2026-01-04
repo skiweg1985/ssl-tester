@@ -198,6 +198,11 @@ ssl-tester example.com --max-crl-bytes 5242880
 ```bash
 # Skip certain checks
 ssl-tester example.com --skip-protocol
+
+# Run only specific checks (exclusive mode)
+ssl-tester example.com --only-checks chain,hostname,protocol
+ssl-tester example.com --only-checks crl,ocsp
+ssl-tester example.com --only-checks vulnerabilities --vulnerability-list heartbleed,drown
 ssl-tester example.com --skip-cipher
 ssl-tester example.com --skip-vulnerabilities
 ssl-tester example.com --skip-security

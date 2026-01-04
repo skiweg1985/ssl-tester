@@ -201,4 +201,5 @@ class CheckResult:
     summary: str = ""
     rating: Optional[Rating] = None  # Security rating (A++ to F)
     rating_reasons: List[str] = field(default_factory=list)  # Reasons for rating downgrade
+    only_checks: Optional[List[str]] = None  # List of checks that were explicitly selected (for filtering report)
 

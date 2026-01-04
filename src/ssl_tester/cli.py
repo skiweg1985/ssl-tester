@@ -65,6 +65,7 @@ def perform_ssl_check(
     vulnerabilities: bool = False,
     vulnerability_list: Optional[str] = None,
     skip_security: bool = False,
+    only_checks: Optional[str] = None,
     ca_bundle: Optional[Path] = None,
     ipv6: bool = False,
     proxy: Optional[str] = None,
@@ -82,6 +83,45 @@ def perform_ssl_check(
         CheckResult
     """
     logger = logging.getLogger(__name__)
+    
+    # Handle --only-checks parameter (exclusive mode: only run specified checks)
+    only_checks_set: Optional[set] = None
+    only_checks_list: Optional[List[str]] = None
+    if only_checks:
+        only_checks_list = [c.strip().lower() for c in only_checks.split(",") if c.strip()]
+        
+        # Valid available checks
+        valid_checks = {"chain", "hostname", "crl", "ocsp", "protocol", "cipher", "vulnerabilities", "security"}
+        
+        # Validate check names
+        invalid_checks = [c for c in only_checks_list if c not in valid_checks]
+        if invalid_checks:
+            logger.warning(f"Unknown check names: {', '.join(invalid_checks)}. Available: {', '.join(sorted(valid_checks))}")
+            only_checks_list = [c for c in only_checks_list if c in valid_checks]
+        
+        if not only_checks_list:
+            logger.error("No valid checks specified in --only-checks. Aborting.")
+            raise ValueError("No valid checks specified in --only-checks")
+        
+        only_checks_set = set(only_checks_list)
+        
+        # CRL/OCSP require chain check (they need certificate information)
+        if ("crl" in only_checks_set or "ocsp" in only_checks_set) and "chain" not in only_checks_set:
+            logger.warning("CRL/OCSP checks require chain check. Adding 'chain' to checks.")
+            only_checks_set.add("chain")
+            only_checks_list.append("chain")
+        
+        # Set skip_* flags based on only_checks (inverse logic)
+        skip_chain = "chain" not in only_checks_set
+        skip_hostname = "hostname" not in only_checks_set
+        skip_protocol = "protocol" not in only_checks_set
+        skip_cipher = "cipher" not in only_checks_set
+        skip_security = "security" not in only_checks_set
+        
+        # Vulnerability handling
+        vulnerabilities = "vulnerabilities" in only_checks_set
+        
+        logger.info(f"Running only specified checks: {', '.join(sorted(only_checks_set))}")
     
     # Detect or set service type
     service_type: Optional[str] = None
@@ -329,7 +369,7 @@ def perform_ssl_check(
 
     # Check CRL reachability
     crl_checks = []
-    if not skip_chain:
+    if not skip_chain and (only_checks_set is None or "crl" in only_checks_set):
         try:
             crl_checks = check_crl_reachability(
                 all_cert_infos,
@@ -349,7 +389,7 @@ def perform_ssl_check(
 
     # Check OCSP reachability
     ocsp_checks = []
-    if not skip_chain:
+    if not skip_chain and (only_checks_set is None or "ocsp" in only_checks_set):
         try:
             issuer_cert_der: Optional[bytes] = None
             
@@ -448,12 +488,22 @@ def perform_ssl_check(
         service_type=service_type,
         overall_severity=Severity.OK,  # Will be calculated
         summary="",  # Will be generated
+        only_checks=only_checks_list,  # Store selected checks for report filtering
     )
 
     # Calculate overall severity, rating, and summary
-    result.overall_severity = calculate_overall_severity(result)
-    result.rating, result.rating_reasons = calculate_rating(result)
-    result.summary = generate_summary(result)
+    # Only calculate rating/summary if all checks were performed (not using --only-checks)
+    if only_checks_list:
+        # Partial check - only calculate severity for selected checks
+        result.overall_severity = calculate_overall_severity(result)
+        result.rating = None  # Rating doesn't make sense for partial checks
+        result.rating_reasons = []
+        result.summary = f"Partial check: Only {', '.join(sorted(set(only_checks_list)))} checks performed"
+    else:
+        # Full check - calculate everything
+        result.overall_severity = calculate_overall_severity(result)
+        result.rating, result.rating_reasons = calculate_rating(result)
+        result.summary = generate_summary(result)
 
     return result
 
@@ -485,6 +535,11 @@ def check(
         help="Specify which vulnerabilities to check (comma-separated). Requires --vulnerabilities. Available: heartbleed, drown, poodle, ccs-injection, freak, logjam, ticketbleed, sweet32",
     ),
     skip_security: bool = typer.Option(False, "--skip-security", help="Skip security best practices checks"),
+    only_checks: Optional[str] = typer.Option(
+        None,
+        "--only-checks",
+        help="Only run specified checks (comma-separated). Available: chain, hostname, crl, ocsp, protocol, cipher, vulnerabilities, security. Example: --only-checks chain,hostname,protocol",
+    ),
     service: Optional[str] = typer.Option(None, "--service", help="Service type (HTTPS, SMTP, IMAP, POP3, FTP, LDAP, XMPP, RDP, PostgreSQL, MySQL). Auto-detected from port if not specified."),
     html: Optional[Path] = typer.Option(None, "--html", help="Generate HTML report and save to file"),
     csv: Optional[Path] = typer.Option(None, "--csv", help="Generate CSV report and save to file"),
@@ -568,6 +623,7 @@ def check(
         vulnerabilities=vulnerabilities,
         vulnerability_list=vulnerability_list,
         skip_security=skip_security,
+        only_checks=only_checks,
         ca_bundle=ca_bundle,
         ipv6=ipv6,
         proxy=proxy,
@@ -628,6 +684,11 @@ def batch(
         "--vulnerability-list",
         help="Specify which vulnerabilities to check (comma-separated). Requires --vulnerabilities. Available: heartbleed, drown, poodle, ccs-injection, freak, logjam, ticketbleed, sweet32",
     ),
+    only_checks: Optional[str] = typer.Option(
+        None,
+        "--only-checks",
+        help="Only run specified checks (comma-separated). Available: chain, hostname, crl, ocsp, protocol, cipher, vulnerabilities, security. Example: --only-checks chain,hostname,protocol",
+    ),
     insecure: bool = typer.Option(False, "--insecure", help="Accept self-signed certificates"),
     ca_bundle: Optional[Path] = typer.Option(None, "--ca-bundle", help="Custom CA bundle"),
     proxy: Optional[str] = typer.Option(None, "--proxy", help="Proxy URL"),
@@ -660,6 +721,7 @@ def batch(
                 vulnerabilities=vulnerabilities,
                 vulnerability_list=vulnerability_list,
                 skip_security=skip_security,
+                only_checks=only_checks,
                 ca_bundle=ca_bundle,
                 ipv6=False,  # Batch mode doesn't support IPv6 preference
                 proxy=proxy,
@@ -786,6 +848,7 @@ def compare(
         vulnerabilities=vulnerabilities,
         vulnerability_list=vulnerability_list,
         skip_security=skip_security,
+        only_checks=only_checks,
         ca_bundle=None,
         ipv6=False,
         proxy=None,
@@ -806,6 +869,7 @@ def compare(
         vulnerabilities=vulnerabilities,
         vulnerability_list=vulnerability_list,
         skip_security=skip_security,
+        only_checks=only_checks,
         ca_bundle=None,
         ipv6=False,
         proxy=None,
