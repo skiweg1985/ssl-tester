@@ -292,7 +292,20 @@ def validate_chain(
                             
                             # Check if this cert's subject matches the trust store root subject
                             # This indicates it's a cross-signed certificate (same subject, different issuer/serial)
+                            # BUT: If it's truly self-signed (even with unsupported algorithm), it's NOT cross-signed,
+                            # it's just the same root CA (possibly with different serial number)
                             if cert_info.subject == root_from_trust_store_info.subject:
+                                # First check: If this cert is truly self-signed, it's NOT cross-signed
+                                # It's just the same root CA (possibly with different serial)
+                                if _is_truly_self_signed(cert):
+                                    # Same root CA, not cross-signed - skip
+                                    logger.debug(
+                                        f"Certificate '{cert_info.subject}' has same subject as trust store root "
+                                        f"and is truly self-signed (even with unsupported algorithm). "
+                                        f"Not treating as cross-signed (same root CA)."
+                                    )
+                                    continue
+                                
                                 # Check if this cert was removed from intermediates (replaced)
                                 # or if it's a cross-signed cert (subject==issuer but not truly self-signed)
                                 # or if it has a different issuer than the trust store root (cross-signed)
@@ -1050,14 +1063,27 @@ def _is_truly_self_signed(cert: x509.Certificate) -> bool:
             return True
         except Exception as e:
             error_msg = str(e).lower()
+            error_type = type(e).__name__
+            
             # Check if the error is due to unsupported signature algorithm
             # This is common for older root CAs (e.g., MD5 with RSA)
             # If subject==issuer and we can't verify due to unsupported algorithm,
             # we treat it as self-signed (it's in the trust store and subject==issuer)
-            if "unsupported" in error_msg and ("signature" in error_msg or "algorithm" in error_msg):
+            
+            # Check for various forms of "unsupported algorithm" errors
+            # If subject==issuer and we get an "unsupported" error, it's likely an old root CA
+            # with an unsupported signature algorithm (e.g., MD5 with RSA), not a cross-signed cert
+            is_unsupported_algorithm = (
+                "unsupported" in error_msg or
+                ("not supported" in error_msg and ("signature" in error_msg or "algorithm" in error_msg)) or
+                ("algorithm" in error_msg and ("not available" in error_msg or "not implemented" in error_msg)) or
+                error_type in ["UnsupportedAlgorithm", "NotSupportedError"]
+            )
+            
+            if is_unsupported_algorithm:
                 logger.debug(
                     f"Certificate '{cert_info.subject}' has subject==issuer but signature "
-                    f"verification failed due to unsupported algorithm: {e}. "
+                    f"verification failed due to unsupported algorithm ({error_type}): {e}. "
                     f"Treating as self-signed (subject==issuer)."
                 )
                 return True
@@ -1065,7 +1091,7 @@ def _is_truly_self_signed(cert: x509.Certificate) -> bool:
             # For other errors, this is likely a cross-signed certificate
             logger.debug(
                 f"Certificate '{cert_info.subject}' has subject==issuer but signature "
-                f"verification failed: {e}. This is likely a cross-signed certificate."
+                f"verification failed ({error_type}): {e}. This is likely a cross-signed certificate."
             )
             return False
     except Exception as e:
