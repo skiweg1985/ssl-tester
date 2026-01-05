@@ -228,7 +228,7 @@ def connect_tls(
     ipv6: bool = False,
     ignore_hostname: bool = False,
     service: Optional[str] = None,
-) -> Tuple[bytes, List[bytes]]:
+) -> Tuple[bytes, List[bytes], str]:
     """
     Establish TLS connection and extract certificate chain.
     
@@ -245,7 +245,7 @@ def connect_tls(
         service: Service type (e.g., "SMTP", "IMAP", "POP3") - used to determine STARTTLS
 
     Returns:
-        Tuple of (leaf_certificate_der, chain_certificates_der_list)
+        Tuple of (leaf_certificate_der, chain_certificates_der_list, ip_address)
 
     Raises:
         ConnectionError: If connection fails
@@ -268,11 +268,14 @@ def connect_tls(
 
     # Resolve address
     family = socket.AF_INET6 if ipv6 else socket.AF_INET
+    ip_address: Optional[str] = None
     try:
         addr_info = socket.getaddrinfo(host, port, family, socket.SOCK_STREAM)
         if not addr_info:
             raise ConnectionError(f"Could not resolve {host}:{port}")
         addr = addr_info[0][4]
+        # IP-Adresse extrahieren (addr ist ein Tuple: (host, port) für IPv4 oder (host, port, flowinfo, scopeid) für IPv6)
+        ip_address = addr[0] if isinstance(addr, tuple) else str(addr)
     except socket.gaierror as e:
         raise ConnectionError(f"DNS resolution failed for {host}: {e}")
 
@@ -369,7 +372,7 @@ def connect_tls(
             else:
                 logger.warning("Could not extract certificate chain via OpenSSL. Will attempt to fetch intermediates via AIA if available.")
 
-        return leaf_cert_der, chain_certs_der
+        return leaf_cert_der, chain_certs_der, ip_address
 
     except socket.timeout:
         raise ConnectionError(f"Connection timeout after {timeout}s")

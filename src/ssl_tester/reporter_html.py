@@ -41,6 +41,7 @@ def generate_html_report(result: CheckResult) -> str:
                 <div class="info-item">
                     <strong>Target:</strong> {result.target_host}:{result.target_port}
                 </div>
+                {f'<div class="info-item"><strong>IP Address:</strong> {result.target_ip}</div>' if result.target_ip else ''}
                 {f'<div class="info-item"><strong>Service:</strong> {result.service_type}</div>' if result.service_type else ''}
                 <div class="info-item">
                     <strong>Timestamp:</strong> {result.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}

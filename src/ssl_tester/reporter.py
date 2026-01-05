@@ -53,7 +53,10 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
     lines.append("=" * 70)
     lines.append("SSL/TLS Certificate Check Report")
     lines.append("=" * 70)
-    lines.append(f"Target: {result.target_host}:{result.target_port}")
+    target_line = f"Target: {result.target_host}:{result.target_port}"
+    if result.target_ip:
+        target_line += f" (IP: {result.target_ip})"
+    lines.append(target_line)
     if result.service_type:
         lines.append(f"Service: {result.service_type}")
     lines.append(f"Timestamp: {result.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}")
@@ -1177,9 +1180,13 @@ def generate_terminal_report(
     stapling_status = "Yes" if (result.security_check and result.security_check.ocsp_stapling_enabled) else "No"
     
     # Build header line
+    host_port_text = f"{result.target_host}:{result.target_port}"
+    if result.target_ip:
+        host_port_text += f" (IP: {result.target_ip})"
+    
     header_parts = [
         overall_status_text,
-        f"{result.target_host}:{result.target_port}",
+        host_port_text,
         f"Rating: {rating_text}",
         f"TLS: {tls_version}",
         f"Expiry: {expiry_text}",
@@ -1345,7 +1352,10 @@ def generate_terminal_report(
     lines.append("Phase 1: Connectivity")
     lines.append(f"  Status: {_format_severity(Severity.OK)}")
     if verbose:
-        lines.append(f"  Connected to {result.target_host}:{result.target_port}")
+        connected_text = f"  Connected to {result.target_host}:{result.target_port}"
+        if result.target_ip:
+            connected_text += f" (IP: {result.target_ip})"
+        lines.append(connected_text)
         if result.service_type:
             lines.append(f"  Service Type: {result.service_type}")
     lines.append("")

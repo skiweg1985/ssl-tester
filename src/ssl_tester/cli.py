@@ -157,9 +157,10 @@ def perform_ssl_check(
     leaf_cert_der: Optional[bytes] = None
     chain_certs_der: List[bytes] = []
     leaf_cert_info: Optional[CertificateInfo] = None
+    ip_address: Optional[str] = None
 
     try:
-        leaf_cert_der, chain_certs_der = connect_tls(
+        leaf_cert_der, chain_certs_der, ip_address = connect_tls(
             hostname, port, timeout, insecure, ca_bundle, ipv6, service=service_type
         )
     except ssl.SSLError as e:
@@ -169,7 +170,7 @@ def perform_ssl_check(
         logger.debug("Attempting to retrieve certificate despite SSL error...")
         
         try:
-            leaf_cert_der, chain_certs_der = connect_tls(
+            leaf_cert_der, chain_certs_der, ip_address = connect_tls(
                 hostname, port, timeout, insecure=True, ca_bundle=ca_bundle, ipv6=ipv6, ignore_hostname=True, service=service_type
             )
             logger.debug("Successfully retrieved certificate (validation bypassed for certificate extraction)")
@@ -235,6 +236,7 @@ def perform_ssl_check(
         result = CheckResult(
             target_host=hostname,
             target_port=port,
+            target_ip=ip_address,
             timestamp=datetime.utcnow(),
             chain_check=chain_check,
             hostname_check=hostname_check,
@@ -550,6 +552,7 @@ def perform_ssl_check(
     result = CheckResult(
         target_host=hostname,
         target_port=port,
+        target_ip=ip_address,
         timestamp=datetime.utcnow(),
         chain_check=chain_check,
         hostname_check=hostname_check,
