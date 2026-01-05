@@ -1026,6 +1026,10 @@ def _is_truly_self_signed(cert: x509.Certificate) -> bool:
     This is important for detecting cross-signed certificates, which may have
     subject == issuer but are actually signed by another CA.
     
+    Special handling: If signature verification fails with "Unsupported signature algorithm",
+    we still treat it as self-signed if subject==issuer, since this is a limitation of the
+    cryptography library, not an indication of cross-signing.
+    
     Args:
         cert: Certificate to check
         
@@ -1045,8 +1049,24 @@ def _is_truly_self_signed(cert: x509.Certificate) -> bool:
             # Don't log each successful verification - too verbose
             return True
         except Exception as e:
-            # Only log failures for cross-signed certificates (less verbose)
-            logger.debug(f"Certificate '{cert_info.subject}' has subject==issuer but signature verification failed: {e}. This is likely a cross-signed certificate.")
+            error_msg = str(e).lower()
+            # Check if the error is due to unsupported signature algorithm
+            # This is common for older root CAs (e.g., MD5 with RSA)
+            # If subject==issuer and we can't verify due to unsupported algorithm,
+            # we treat it as self-signed (it's in the trust store and subject==issuer)
+            if "unsupported" in error_msg and ("signature" in error_msg or "algorithm" in error_msg):
+                logger.debug(
+                    f"Certificate '{cert_info.subject}' has subject==issuer but signature "
+                    f"verification failed due to unsupported algorithm: {e}. "
+                    f"Treating as self-signed (subject==issuer)."
+                )
+                return True
+            
+            # For other errors, this is likely a cross-signed certificate
+            logger.debug(
+                f"Certificate '{cert_info.subject}' has subject==issuer but signature "
+                f"verification failed: {e}. This is likely a cross-signed certificate."
+            )
             return False
     except Exception as e:
         logger.debug(f"Error checking if certificate is self-signed: {e}")
