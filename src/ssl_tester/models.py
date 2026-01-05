@@ -213,4 +213,5 @@ class CheckResult:
     rating_reasons: List[str] = field(default_factory=list)  # Reasons for rating downgrade
     only_checks: Optional[List[str]] = None  # List of checks that were explicitly selected (for filtering report)
     target_ip: Optional[str] = None  # IP-Adresse des aufgerufenen Hosts
+    insecure_mode: bool = False  # Flag: Explicit insecure mode was enabled (validation skipped)
 

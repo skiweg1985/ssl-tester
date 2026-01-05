@@ -629,6 +629,7 @@ def perform_ssl_check(
         overall_severity=Severity.OK,  # Will be calculated
         summary="",  # Will be generated
         only_checks=only_checks_list,  # Store selected checks for report filtering
+        insecure_mode=insecure and not certificate_extraction_only,  # Only set if explicit insecure mode (not auto-recovery)
     )
 
     # Calculate overall severity, rating, and summary

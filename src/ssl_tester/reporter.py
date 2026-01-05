@@ -993,6 +993,11 @@ def generate_summary(result: CheckResult) -> str:
 
     # Note: Intermediate certificates fetched via AIA (informational, not an issue)
     notes = []
+    if result.insecure_mode:
+        notes.append(
+            "Note: Certificate validation was skipped (--insecure mode enabled). "
+            "The certificate chain and trust store validation were bypassed."
+        )
     if result.chain_check.intermediates_fetched_via_aia:
         count = result.chain_check.intermediates_fetched_count
         # Bei STARTTLS ist es sehr häufig, bei HTTPS auch nicht ungewöhnlich
@@ -1354,7 +1359,10 @@ def generate_terminal_report(
         return "\n".join(lines)
     
     lines.append("Phase 1: Connectivity")
-    lines.append(f"  Status: {_format_severity(Severity.OK)}")
+    if result.insecure_mode:
+        lines.append(f"  Status: SKIPPED (--insecure mode)")
+    else:
+        lines.append(f"  Status: {_format_severity(Severity.OK)}")
     if verbose:
         connected_text = f"  Connected to {result.target_host}:{result.target_port}"
         if result.target_ip:
@@ -1370,6 +1378,8 @@ def generate_terminal_report(
     lines.append("Phase 2: Certificate Chain")
     if result.chain_check.skipped:
         lines.append(f"  Status: SKIPPED (--skip-chain)")
+    elif result.insecure_mode:
+        lines.append(f"  Status: SKIPPED (--insecure mode)")
     else:
         lines.append(f"  Status: {_format_severity(result.chain_check.severity)}")
         
@@ -1446,6 +1456,8 @@ def generate_terminal_report(
     lines.append("Phase 3: Hostname Matching")
     if result.hostname_check.skipped:
         lines.append(f"  Status: SKIPPED (--skip-hostname)")
+    elif result.insecure_mode:
+        lines.append(f"  Status: SKIPPED (--insecure mode)")
     else:
         lines.append(f"  Status: {_format_severity(result.hostname_check.severity)}")
         if verbose:
