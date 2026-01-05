@@ -155,10 +155,12 @@ def perform_ssl_check(
         progress_callback("Connecting to server...", None, None)
     
     connection_error: Optional[str] = None
+    original_connection_error: Optional[str] = None  # Store original error for certificate_extraction_only mode
     leaf_cert_der: Optional[bytes] = None
     chain_certs_der: List[bytes] = []
     leaf_cert_info: Optional[CertificateInfo] = None
     ip_address: Optional[str] = None
+    certificate_extraction_only: bool = False  # Flag: Auto-recovery mode (extract cert but mark as FAIL)
 
     # Determine SNI hostname: use server_name if provided, otherwise use hostname
     sni_hostname = server_name if server_name else hostname
@@ -174,28 +176,52 @@ def perform_ssl_check(
         connection_error = f"SSL/TLS error: {error_msg}"
         logger.warning(f"SSL error during connection: {error_msg}")
         
-        # Only attempt recovery if insecure mode was explicitly enabled by user
-        # Don't automatically enable ignore_hostname - only use it if insecure is explicitly set
+        # Check if this is a certificate verification error
+        is_cert_verify_error = (
+            "CERTIFICATE_VERIFY_FAILED" in error_msg or
+            "certificate verify failed" in error_msg.lower() or
+            "self-signed certificate" in error_msg.lower()
+        )
+        
+        # Attempt automatic recovery for certificate verification errors
+        # This allows us to retrieve certificate details even if validation fails
+        # BUT: We mark this as certificate_extraction_only (not explicit insecure mode)
         if insecure:
+            # User explicitly enabled insecure mode
             logger.debug("Attempting to retrieve certificate despite SSL error (insecure mode enabled)...")
+            certificate_extraction_only = False  # Explicit insecure, treat as OK
+        elif is_cert_verify_error:
+            # Automatic recovery - extract certificate but mark as failed
+            logger.info("Certificate validation failed - attempting to extract certificate details for analysis...")
+            certificate_extraction_only = True  # Auto-recovery, treat as FAIL
+        else:
+            logger.debug("SSL error occurred - use --insecure flag to bypass certificate validation and retrieve certificate")
+        
+        if insecure or certificate_extraction_only:
             try:
-                # Bei Fehler-Recovery: SNI trotzdem senden (wichtig für LibreSSL)
-                # Verwende server_name falls gesetzt, sonst hostname
-                # Only ignore hostname if insecure is explicitly enabled
+                # WICHTIG: SNI/server_name immer setzen (auch beim automatischen Recovery)
+                # Das ist wichtig für Load Balancer, die auf SNI reagieren
+                # Verwende server_name falls gesetzt, sonst hostname (wie beim ursprünglichen Versuch)
                 recovery_sni = server_name if server_name else hostname
+                logger.debug(f"Recovery attempt: Using SNI hostname '{recovery_sni}' (important for SNI-aware load balancers)")
+                
                 leaf_cert_der, chain_certs_der, ip_address = connect_tls(
-                    hostname, port, timeout, insecure=insecure, ca_bundle=ca_bundle, 
+                    hostname, port, timeout, insecure=True, ca_bundle=ca_bundle, 
                     ipv6=ipv6, ignore_hostname=True, service=service_type,
-                    server_name=recovery_sni,
+                    server_name=recovery_sni,  # SNI explizit setzen!
                 )
-                logger.debug("Successfully retrieved certificate (validation bypassed for certificate extraction)")
+                logger.info("Successfully retrieved certificate (validation bypassed for certificate extraction)")
+                # Store original error for certificate_extraction_only mode (so user knows it was a recovery)
+                if certificate_extraction_only:
+                    # Keep the original error message to show in results
+                    original_connection_error = connection_error
+                    connection_error = None  # Clear so it doesn't interfere with other checks
+                else:
+                    # Clear connection_error since we successfully retrieved the certificate (explicit insecure mode)
+                    connection_error = None
             except Exception as e2:
                 logger.error(f"Failed to retrieve certificate: {e2}")
                 connection_error = f"{connection_error}; Certificate retrieval failed: {e2}"
-        else:
-            logger.debug("SSL error occurred - use --insecure flag to bypass certificate validation and retrieve certificate")
-            # Don't attempt recovery if insecure mode is not explicitly enabled
-            # Don't automatically enable ignore_hostname either
     except Exception as e:
         connection_error = f"Connection error: {e}"
         logger.error(f"Connection failed: {e}")
@@ -299,14 +325,21 @@ def perform_ssl_check(
             severity=Severity.OK,
             skipped=True,
         )
-    elif insecure:
-        # In insecure mode, skip hostname check (self-signed certs often have incorrect hostnames)
+    elif insecure and not certificate_extraction_only:
+        # In explicit insecure mode, skip hostname check (self-signed certs often have incorrect hostnames)
+        # BUT: In certificate_extraction_only mode, we still want to check hostname (and mark as FAIL if it doesn't match)
         hostname_check = HostnameCheckResult(
             expected_hostname=hostname,
             matches=False,  # We don't know if it matches, but we don't care in insecure mode
             severity=Severity.OK,
             skipped=False,  # Not explicitly skipped, but treated as OK
         )
+    elif certificate_extraction_only:
+        # Auto-recovery mode: Check hostname but mark as FAIL if it doesn't match
+        hostname_check = check_hostname(leaf_cert_info, hostname)
+        # Ensure it's marked as FAIL if it doesn't match (not OK like in explicit insecure mode)
+        if not hostname_check.matches:
+            hostname_check.severity = Severity.FAIL
     else:
         hostname_check = check_hostname(leaf_cert_info, hostname)
         if connection_error:
@@ -338,12 +371,18 @@ def perform_ssl_check(
         )
     else:
         try:
-            chain_check, chain_findings = validate_chain(leaf_cert_der, chain_certs_der, insecure, ca_bundle)
+            chain_check, chain_findings = validate_chain(leaf_cert_der, chain_certs_der, insecure, ca_bundle, certificate_extraction_only=certificate_extraction_only)
             # Set AIA fetching information
             chain_check.intermediates_fetched_via_aia = intermediates_fetched_count > 0
             chain_check.intermediates_fetched_count = intermediates_fetched_count
             all_certificate_findings.extend(chain_findings)
-            if connection_error and not chain_check.error:
+            # If certificate_extraction_only, ensure error message is set
+            if certificate_extraction_only and original_connection_error and not chain_check.error:
+                # Use the original connection error to show that validation failed
+                chain_check.error = original_connection_error
+                chain_check.severity = Severity.FAIL
+                chain_check.is_valid = False
+            elif connection_error and not chain_check.error:
                 chain_check.error = connection_error
                 chain_check.severity = Severity.FAIL
                 chain_check.is_valid = False
