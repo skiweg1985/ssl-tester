@@ -414,6 +414,19 @@ def generate_text_report(result: CheckResult, severity_filter: Optional[Severity
         lines.append(f"  Overall Status: {_format_severity(result.overall_severity)}")
         if result.summary:
             lines.append(f"  {result.summary}")
+        
+        # Add notes as separate field if present
+        notes = []
+        if result.insecure_mode:
+            notes.append("Certificate validation skipped (--insecure mode)")
+        if result.chain_check.intermediates_fetched_via_aia:
+            count = result.chain_check.intermediates_fetched_count
+            if result.service_type and result.service_type in ["SMTP", "IMAP", "POP3"]:
+                notes.append(f"{count} intermediate certificate(s) fetched via AIA (common for {result.service_type} STARTTLS)")
+            else:
+                notes.append(f"{count} intermediate certificate(s) fetched via AIA")
+        if notes:
+            lines.append(f"  Note: {'; '.join(notes)}")
     lines.append("=" * 70)
 
     return "\n".join(lines)
@@ -994,10 +1007,7 @@ def generate_summary(result: CheckResult) -> str:
     # Note: Intermediate certificates fetched via AIA (informational, not an issue)
     notes = []
     if result.insecure_mode:
-        notes.append(
-            "Note: Certificate validation was skipped (--insecure mode enabled). "
-            "The certificate chain and trust store validation were bypassed."
-        )
+        notes.append("Certificate validation skipped (--insecure mode)")
     if result.chain_check.intermediates_fetched_via_aia:
         count = result.chain_check.intermediates_fetched_count
         # Bei STARTTLS ist es sehr häufig, bei HTTPS auch nicht ungewöhnlich
@@ -1015,13 +1025,10 @@ def generate_summary(result: CheckResult) -> str:
             )
 
     if not issues:
-        if notes:
-            return "All checks passed successfully; " + "; ".join(notes)
         return "All checks passed successfully"
 
     summary = "; ".join(issues)
-    if notes:
-        summary += "; " + "; ".join(notes)
+    # Notes are handled separately in the report, not in summary text
     return summary
 
 
@@ -1223,6 +1230,19 @@ def generate_terminal_report(
         lines.append(f"  Overall Status: {_format_severity(result.overall_severity)}")
         if result.summary:
             lines.append(f"  {result.summary}")
+        
+        # Add notes as separate field if present
+        notes = []
+        if result.insecure_mode:
+            notes.append("Certificate validation skipped (--insecure mode)")
+        if result.chain_check.intermediates_fetched_via_aia:
+            count = result.chain_check.intermediates_fetched_count
+            if result.service_type and result.service_type in ["SMTP", "IMAP", "POP3"]:
+                notes.append(f"{count} intermediate certificate(s) fetched via AIA (common for {result.service_type} STARTTLS)")
+            else:
+                notes.append(f"{count} intermediate certificate(s) fetched via AIA")
+        if notes:
+            lines.append(f"  Note: {'; '.join(notes)}")
         lines.append("=" * 70)
         return "\n".join(lines)
     
@@ -1355,6 +1375,19 @@ def generate_terminal_report(
         lines.append(f"  Overall Status: {_format_severity(result.overall_severity)}")
         if result.summary:
             lines.append(f"  {result.summary}")
+        
+        # Add notes as separate field if present
+        notes = []
+        if result.insecure_mode:
+            notes.append("Certificate validation skipped (--insecure mode)")
+        if result.chain_check.intermediates_fetched_via_aia:
+            count = result.chain_check.intermediates_fetched_count
+            if result.service_type and result.service_type in ["SMTP", "IMAP", "POP3"]:
+                notes.append(f"{count} intermediate certificate(s) fetched via AIA (common for {result.service_type} STARTTLS)")
+            else:
+                notes.append(f"{count} intermediate certificate(s) fetched via AIA")
+        if notes:
+            lines.append(f"  Note: {'; '.join(notes)}")
         lines.append("=" * 70)
         return "\n".join(lines)
     
@@ -1696,6 +1729,19 @@ def generate_terminal_report(
         lines.append(f"  Overall Status: {_format_severity(result.overall_severity)}")
         if result.summary:
             lines.append(f"  {result.summary}")
+        
+        # Add notes as separate field if present
+        notes = []
+        if result.insecure_mode:
+            notes.append("Certificate validation skipped (--insecure mode)")
+        if result.chain_check.intermediates_fetched_via_aia:
+            count = result.chain_check.intermediates_fetched_count
+            if result.service_type and result.service_type in ["SMTP", "IMAP", "POP3"]:
+                notes.append(f"{count} intermediate certificate(s) fetched via AIA (common for {result.service_type} STARTTLS)")
+            else:
+                notes.append(f"{count} intermediate certificate(s) fetched via AIA")
+        if notes:
+            lines.append(f"  Note: {'; '.join(notes)}")
     lines.append("=" * 70)
     
     return "\n".join(lines)
