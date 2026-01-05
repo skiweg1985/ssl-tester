@@ -5,8 +5,11 @@ import ssl
 import sys
 import logging
 import subprocess
+import tempfile
+import os
 from typing import Tuple, Optional, List
 from pathlib import Path
+from cryptography.hazmat.primitives import serialization
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +63,45 @@ def _create_ssl_context_with_ca_bundle(
                     break
                 except Exception as e:
                     logger.debug(f"Error loading CA certificates from {ca_path}: {e}")
+        
+        # Load macOS Keychain certificates into SSL context
+        # This ensures that private CAs and user-installed certificates are trusted
+        try:
+            from ssl_tester.chain import _load_macos_keychain_certificates, _split_pem_certificates
+            from ssl_tester.certificate import _load_cert_without_warnings
+            
+            keychain_certs = _load_macos_keychain_certificates()
+            if keychain_certs:
+                # Create a temporary PEM file with all Keychain certificates
+                # We need to convert DER to PEM for load_verify_locations
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False) as tmp_file:
+                    tmp_path = tmp_file.name
+                    try:
+                        # Convert DER certificates to PEM format
+                        for cert_der in keychain_certs:
+                            try:
+                                cert = _load_cert_without_warnings(cert_der, pem=False)
+                                pem_data = cert.public_bytes(serialization.Encoding.PEM)
+                                tmp_file.write(pem_data.decode('utf-8'))
+                            except Exception as e:
+                                logger.debug(f"Error converting Keychain certificate to PEM: {e}")
+                        
+                        tmp_file.flush()
+                        
+                        # Load the temporary PEM file into SSL context
+                        context.load_verify_locations(tmp_path)
+                        logger.debug(f"Loaded {len(keychain_certs)} certificate(s) from macOS Keychain into SSL context")
+                    finally:
+                        # Clean up temporary file
+                        try:
+                            os.unlink(tmp_path)
+                        except Exception:
+                            pass  # Ignore cleanup errors
+        except ImportError:
+            # chain module might not be available in all contexts
+            logger.debug("Could not import chain module for Keychain loading")
+        except Exception as e:
+            logger.debug(f"Error loading Keychain certificates into SSL context: {e}")
     
     # Configure context based on parameters
     if insecure:

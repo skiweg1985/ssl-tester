@@ -21,6 +21,7 @@ from ssl_tester.chain import (
     _is_truly_self_signed,
 )
 from ssl_tester.models import Severity
+from ssl_tester.certificate import parse_certificate
 
 
 @pytest.fixture
@@ -1253,5 +1254,256 @@ def test_cross_signed_certificate_detection():
         print(f"  - Actual signer: {cross_signed.actual_signer}")
         
         print("\n✅ Test erfolgreich: Cross-Signed Certificate wurde korrekt erkannt")
+        print("="*80 + "\n")
+
+
+@patch('ssl_tester.chain.x509.Certificate.verify_directly_issued_by')
+def test_is_truly_self_signed_with_unsupported_algorithm(mock_verify):
+    """Test _is_truly_self_signed with a root CA that has unsupported signature algorithm."""
+    print("\n" + "="*80)
+    print("TEST: _is_truly_self_signed (Root-CA mit Unsupported Signature Algorithm)")
+    print("="*80)
+    
+    from cryptography import x509
+    
+    # Create a self-signed root certificate
+    root_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    root_subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test Root CA")])
+    root_cert = (
+        x509.CertificateBuilder()
+        .subject_name(root_subject)
+        .issuer_name(root_subject)  # Self-signed
+        .public_key(root_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.utcnow() - timedelta(days=1))
+        .not_valid_after(datetime.utcnow() + timedelta(days=365))
+        .add_extension(
+            x509.BasicConstraints(ca=True, path_length=None),
+            critical=True,
+        )
+        .sign(root_key, hashes.SHA256())
+    )
+    
+    print(f"✓ Root-CA: Subject={root_cert.subject.rfc4514_string()}")
+    print(f"✓ Issuer={root_cert.issuer.rfc4514_string()}")
+    print(f"⚠ Simuliere 'Unsupported signature algorithm' Fehler bei Signaturverifikation")
+    
+    # Mock verify_directly_issued_by to raise "Unsupported signature algorithm" error
+    def verify_side_effect(self, other):
+        if self == root_cert and other == root_cert:
+            raise ValueError("Unsupported signature algorithm")
+        # For other cases, call the real method
+        return x509.Certificate.verify_directly_issued_by(self, other)
+    
+    mock_verify.side_effect = verify_side_effect
+    
+    result = _is_truly_self_signed(root_cert)
+    
+    print(f"\n📊 Ergebnis:")
+    print(f"  - Ist wirklich selbst-signiert: {result}")
+    
+    assert result is True, "Root-CA mit unsupported algorithm sollte als selbst-signiert erkannt werden (subject==issuer)"
+    assert mock_verify.called, "verify_directly_issued_by sollte aufgerufen worden sein"
+    
+    print("\n✅ Test erfolgreich: Root-CA mit unsupported algorithm wurde korrekt als selbst-signiert erkannt")
+    print("="*80 + "\n")
+
+
+@patch('ssl_tester.chain.x509.Certificate.verify_directly_issued_by')
+def test_is_truly_self_signed_with_unsupported_algorithm_variations(mock_verify):
+    """Test _is_truly_self_signed with various unsupported algorithm error messages."""
+    print("\n" + "="*80)
+    print("TEST: _is_truly_self_signed (Verschiedene Unsupported Algorithm Fehlermeldungen)")
+    print("="*80)
+    
+    from cryptography import x509
+    
+    # Test various error message formats
+    error_messages = [
+        "Unsupported signature algorithm",
+        "Unsupported signature algorithm.",
+        "UnsupportedAlgorithm",
+        "Signature algorithm not supported",
+        "Algorithm not supported",
+    ]
+    
+    for error_msg in error_messages:
+        print(f"\n→ Teste mit Fehlermeldung: '{error_msg}'")
+        
+        # Create a self-signed root certificate for each test
+        root_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        root_subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"Test Root CA {error_msg[:20]}")])
+        root_cert = (
+            x509.CertificateBuilder()
+            .subject_name(root_subject)
+            .issuer_name(root_subject)  # Self-signed
+            .public_key(root_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.utcnow() - timedelta(days=1))
+            .not_valid_after(datetime.utcnow() + timedelta(days=365))
+            .add_extension(
+                x509.BasicConstraints(ca=True, path_length=None),
+                critical=True,
+            )
+            .sign(root_key, hashes.SHA256())
+        )
+        
+        # Mock verify_directly_issued_by to raise the specific error
+        def verify_side_effect(self, other):
+            if self == root_cert and other == root_cert:
+                raise ValueError(error_msg)
+            # For other cases, call the real method
+            return x509.Certificate.verify_directly_issued_by(self, other)
+        
+        mock_verify.side_effect = verify_side_effect
+        
+        result = _is_truly_self_signed(root_cert)
+        
+        assert result is True, f"Root-CA sollte mit Fehlermeldung '{error_msg}' als selbst-signiert erkannt werden"
+        print(f"  ✓ Korrekt als selbst-signiert erkannt")
+    
+    print("\n✅ Test erfolgreich: Alle Varianten von unsupported algorithm Fehlermeldungen wurden korrekt erkannt")
+    print("="*80 + "\n")
+
+
+def test_cross_signed_detection_not_triggered_for_unsupported_algorithm():
+    """Test that root CAs with unsupported algorithms are not detected as cross-signed."""
+    print("\n" + "="*80)
+    print("TEST: Cross-Signed Detection (Root-CA mit Unsupported Algorithm wird NICHT als Cross-Signed erkannt)")
+    print("="*80)
+    
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    from ssl_tester.chain import validate_chain
+    
+    # Create a root CA (will be in chain and trust store with same subject, different serials)
+    root_key1 = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    root_subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Simplicity Root CA")])
+    
+    # Root CA in chain (with unsupported algorithm - simulated)
+    root_cert_chain = (
+        x509.CertificateBuilder()
+        .subject_name(root_subject)
+        .issuer_name(root_subject)  # Self-signed
+        .public_key(root_key1.public_key())
+        .serial_number(5334623506688313218)  # Specific serial
+        .not_valid_before(datetime.utcnow() - timedelta(days=1))
+        .not_valid_after(datetime.utcnow() + timedelta(days=365))
+        .add_extension(
+            x509.BasicConstraints(ca=True, path_length=None),
+            critical=True,
+        )
+        .sign(root_key1, hashes.SHA256())
+    )
+    root_cert_chain_der = root_cert_chain.public_bytes(serialization.Encoding.DER)
+    
+    # Root CA in trust store (same subject, different serial)
+    root_key2 = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    root_cert_trust_store = (
+        x509.CertificateBuilder()
+        .subject_name(root_subject)
+        .issuer_name(root_subject)  # Self-signed
+        .public_key(root_key2.public_key())
+        .serial_number(5334623506688313218)  # Same serial (but different key)
+        .not_valid_before(datetime.utcnow() - timedelta(days=1))
+        .not_valid_after(datetime.utcnow() + timedelta(days=365))
+        .add_extension(
+            x509.BasicConstraints(ca=True, path_length=None),
+            critical=True,
+        )
+        .sign(root_key2, hashes.SHA256())
+    )
+    root_cert_trust_store_der = root_cert_trust_store.public_bytes(serialization.Encoding.DER)
+    
+    # Create intermediate signed by root
+    intermediate_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    intermediate_subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Simplicity Linux CA")])
+    intermediate_cert = (
+        x509.CertificateBuilder()
+        .subject_name(intermediate_subject)
+        .issuer_name(root_subject)
+        .public_key(intermediate_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.utcnow() - timedelta(days=1))
+        .not_valid_after(datetime.utcnow() + timedelta(days=365))
+        .add_extension(
+            x509.BasicConstraints(ca=True, path_length=0),
+            critical=True,
+        )
+        .sign(root_key1, hashes.SHA256())
+    )
+    intermediate_cert_der = intermediate_cert.public_bytes(serialization.Encoding.DER)
+    
+    # Create leaf
+    leaf_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    leaf_subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "leaf.example.com")])
+    leaf_cert = (
+        x509.CertificateBuilder()
+        .subject_name(leaf_subject)
+        .issuer_name(intermediate_subject)
+        .public_key(leaf_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.utcnow() - timedelta(days=1))
+        .not_valid_after(datetime.utcnow() + timedelta(days=365))
+        .sign(intermediate_key, hashes.SHA256())
+    )
+    leaf_cert_der = leaf_cert.public_bytes(serialization.Encoding.DER)
+    
+    print(f"✓ Root-CA in Chain: {root_cert_chain.subject.rfc4514_string()} (Serial: {root_cert_chain.serial_number})")
+    print(f"✓ Root-CA in Trust Store: {root_cert_trust_store.subject.rfc4514_string()} (Serial: {root_cert_trust_store.serial_number})")
+    print(f"✓ Intermediate CA: {intermediate_cert.subject.rfc4514_string()}")
+    print(f"✓ Leaf: {leaf_cert.subject.rfc4514_string()}")
+    print(f"⚠ Root-CA in Chain hat unsupported algorithm (simuliert)")
+    
+    # Chain contains: root_cert_chain, intermediate_cert
+    chain_certs = [root_cert_chain_der, intermediate_cert_der]
+    
+    # Mock trust store and get_root_from_trust_store
+    with patch('ssl_tester.chain._load_system_trust_store') as mock_load_trust_store, \
+         patch('ssl_tester.chain._get_root_from_trust_store') as mock_get_root, \
+         patch('ssl_tester.chain._is_truly_self_signed') as mock_is_truly_self_signed:
+        
+        # Mock trust store to return root cert
+        mock_load_trust_store.return_value = [root_cert_trust_store_der]
+        mock_get_root.return_value = root_cert_trust_store_der
+        
+        # Mock _is_truly_self_signed to simulate unsupported algorithm for chain root
+        def mock_is_truly_self_signed_side_effect(cert):
+            cert_der = cert.public_bytes(serialization.Encoding.DER)
+            cert_info, _ = parse_certificate(cert_der)
+            
+            # If it's the chain root cert, simulate unsupported algorithm
+            if cert_info.subject == root_cert_chain.subject.rfc4514_string():
+                # Simulate that verify_directly_issued_by would fail with unsupported algorithm
+                # but we still return True because subject==issuer
+                return True
+            
+            # For trust store root, it's truly self-signed
+            if cert_info.subject == root_cert_trust_store.subject.rfc4514_string():
+                return True
+            
+            # For others, use real implementation
+            from ssl_tester.chain import _is_truly_self_signed as real_is_truly_self_signed
+            return real_is_truly_self_signed(cert)
+        
+        mock_is_truly_self_signed.side_effect = mock_is_truly_self_signed_side_effect
+        
+        result, findings = validate_chain(leaf_cert_der, chain_certs, insecure=False)
+        
+        print(f"\n📊 Ergebnis:")
+        print(f"  - Cross-signed certs detected: {len(result.cross_signed_certs)}")
+        print(f"  - Chain valid: {result.chain_valid}")
+        print(f"  - Trust store valid: {result.trust_store_valid}")
+        
+        # Should NOT detect as cross-signed because it's truly self-signed (even with unsupported algorithm)
+        assert len(result.cross_signed_certs) == 0, \
+            "Root-CA mit unsupported algorithm sollte NICHT als Cross-Signed erkannt werden (ist wirklich selbst-signiert)"
+        
+        # Should not have CERT_CROSS_SIGNED finding
+        cross_signed_findings = [f for f in findings if f.code == "CERT_CROSS_SIGNED"]
+        assert len(cross_signed_findings) == 0, \
+            "Sollte kein CERT_CROSS_SIGNED Finding haben für Root-CA mit unsupported algorithm"
+        
+        print("\n✅ Test erfolgreich: Root-CA mit unsupported algorithm wurde NICHT als Cross-Signed erkannt")
         print("="*80 + "\n")
 
