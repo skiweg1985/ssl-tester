@@ -36,15 +36,21 @@ def _extract_chain_via_openssl(host: str, port: int, timeout: float, ignore_host
             "-showcerts",
         ]
         
-        # SNI-Logik: Wenn server_name explizit gesetzt ist, diesen verwenden
-        # Wenn nicht gesetzt und ignore_hostname=False, host verwenden
-        # Wenn ignore_hostname=True und kein server_name, kein SNI senden
-        sni_hostname = server_name if server_name is not None else host
-        if not ignore_hostname:
-            openssl_cmd.extend(["-servername", sni_hostname])
-            logger.debug(f"Using SNI with hostname: {sni_hostname} (OpenSSL fallback)")
+        # SNI-Logik: Konsistent mit connect_tls()
+        # Wenn server_name explizit gesetzt ist, diesen immer verwenden (auch bei ignore_hostname=True)
+        # Wenn server_name nicht gesetzt ist und ignore_hostname=False, host als SNI verwenden
+        # Nur wenn server_name nicht gesetzt ist UND ignore_hostname=True, kein SNI senden
+        if server_name is not None:
+            # Expliziter SNI-Wert wurde übergeben - immer verwenden (wichtig für korrekte Chain-Extraktion)
+            openssl_cmd.extend(["-servername", server_name])
+            logger.debug(f"Using SNI with hostname: {server_name} (OpenSSL fallback, explicit server_name)")
+        elif not ignore_hostname:
+            # Standard: hostname als SNI verwenden
+            openssl_cmd.extend(["-servername", host])
+            logger.debug(f"Using SNI with hostname: {host} (OpenSSL fallback)")
         else:
-            logger.debug(f"SNI disabled for OpenSSL fallback (ignore_hostname=True)")
+            # Nur wenn kein server_name UND ignore_hostname=True -> kein SNI
+            logger.debug(f"SNI disabled for OpenSSL fallback (ignore_hostname=True, no explicit server_name)")
         
         # For ignore_hostname, we still want to get certificates even if validation fails
         # OpenSSL will output certificates regardless of validation status
